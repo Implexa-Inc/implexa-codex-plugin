@@ -103,11 +103,6 @@ If this is a first publish (v0.1.0) AND `--changelog` was NOT supplied, default 
 
 ## Step 7 — Stage the bundle
 
-<!-- TODO (Phase 2 - Codex): The staging path below uses a hardcoded local directory path
-     (/Users/rabigupta/revenoid-workspace/Implexa/clawhub-publish/<slug>) that is specific
-     to the original developer's machine. On Codex, use a temp directory like /tmp/clawhub-publish/<slug>
-     instead, or let the user configure a custom staging path via --staging-dir. -->
-
 Run via Bash:
 
 ```bash

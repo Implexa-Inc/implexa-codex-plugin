@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > release. Only changes to skills, the plugin manifest, or install scripts
 > warrant a version bump.
 
+## [0.11.0] — 2026-05-21
+
+Phase 2 ship. Resolves 3 of 4 Phase 1 TODOs (4th — host hooks — deferred
+to Phase 3 because it requires backend changes).
+
+### Added
+- `$implexa-schedule` now supports three Codex scheduling paths:
+  - **system cron** (recommended, headless): generates a crontab entry
+    the user pastes via `crontab -e`. Most reliable, doesn't require any
+    app running.
+  - **Codex app Automations**: surfaces the prompt + cron for the user to
+    paste into the Codex desktop app's Automations panel.
+  - **GitHub Actions**: generates a workflow YAML the user commits to any
+    repo. Runs in cloud, no laptop required.
+
+### Changed
+- `AskUserQuestion`-style multi-choice prompts replaced with a numbered-list
+  text fallback across record-skill, update-skill, schedule. Functional
+  equivalence; clunkier UX than Claude Code's native picker but ships now.
+- `slack-plugin` destination now fails gracefully on Codex with a clear
+  error message + alternative (use `slack-webhook` instead).
+- `run-scheduled` skill body acknowledges the codex-exec context (no
+  interactive user, all output goes to stdout + persistence layer).
+
+### Deferred to Phase 3
+- Host-forwarded transcript via Codex SessionStart hooks (needs backend
+  changes to accept Codex-formatted event payloads). Demo capture works
+  today without it; just thinner trace.
+
 ## [0.10.1] — 2026-05-21
 
 Initial Codex Plugin System release. Same Implexa backend (https://core.implexa.ai/api/v2/mcp) as the Claude Code plugin, bundled per the Codex `.codex-plugin/plugin.json` manifest convention.

@@ -57,9 +57,15 @@ Confirm to the user:
 
 Same as `$implexa-record-skill`'s Phase 2 — execute their requests, call `record_demo_note` for non-Implexa actions (WebSearch, Bash, browser MCP, manual reasoning steps), don't lead.
 
-<!-- TODO (Phase 2 - Codex): Host-forwarded transcript capture via UserPromptSubmit + Stop hooks is
-     Claude Code-specific. On Codex, use record_demo_note more aggressively for non-Implexa actions
-     until Codex-specific lifecycle events are wired in Phase 2. -->
+<!-- DEFERRED TO PHASE 3 (Codex): host-forwarded transcript via Codex's
+     SessionStart + equivalent lifecycle hooks requires both (a) a Codex-
+     specific hook script (`hooks/hooks.json` config + shell handlers)
+     and (b) a backend route to receive Codex-formatted event payloads.
+     Phase 1 + 2 work on Codex without these — demo capture is thinner
+     but functional (the LLM still observes its own tool calls during a
+     recording session; we just lose the host-forwarded enrichment).
+     Wire this up in Phase 3 once Codex's lifecycle event model is more
+     stable + we have real Codex usage data to tune against. -->
 
 When the user signals they're done (*"ok done"*, *"that's it"*, *"save it"*), move to Phase 4.
 
@@ -83,10 +89,27 @@ You'll get back 2-4 questions, each shipping with 3-4 `options` items.
 
 ### Step 4d — Ask the questions ONE AT A TIME
 
-<!-- TODO (Phase 2 - Codex): AskUserQuestion is Claude Code-specific. Present options as a plain
-     numbered list until Codex gains a native multiple-choice input primitive. -->
+For each question, present it with the options as a numbered list using this pattern:
 
-For each question, present it with the options as a numbered list. Mark the FIRST option as "(Recommended)". After each answer, call **`interview_for_skill`** with:
+```
+<question text>
+
+  1. <option.label> (Recommended), <option.description>
+  2. <option.label>, <option.description>
+  3. <option.label>, <option.description>
+
+Reply with the number (1-3) or type your own answer.
+```
+
+Mark the FIRST option as "(Recommended)".
+
+Parse the reply:
+- A single digit 1-3 maps to the labeled option
+- Free text gets treated as the user's custom answer
+
+Don't loop on invalid input. If the reply is ambiguous, accept it as free-text and proceed.
+
+After each answer, call **`interview_for_skill`** with:
 - `demoId`
 - `step: "answer"`
 - `question`: the verbatim question text

@@ -61,9 +61,15 @@ This is the **observation phase**. Do exactly what the user asks. Run whatever t
 
 1. **external-data tool calls** — automatic. Every Implexa MCP tool you invoke is appended to the demo trace via the session logger. You don't have to do anything.
 2. **Non-Implexa actions** — manual. Any time you use a non-external-data tool (WebSearch, Read, Bash, Write, browser MCP, computer-use, anything outside the Implexa surface), or the user pastes data, or you make a non-obvious decision in your head — call **`record_demo_note`** with a one-sentence summary BEFORE continuing. Example: `record_demo_note({toolName: "web_search", noteText: "Searched G2 for competitor pricing on Snowflake."})`. Silent no-op if no recording active, so safe to call defensively.
-<!-- TODO (Phase 2): Host-forwarded transcript (UserPromptSubmit + Stop + PostToolUse hooks) is Claude Code-specific.
-     On Codex, conversation capture via hooks is not yet wired (Phase 2 work). Record_demo_note is your
-     manual substitute here until Codex-specific lifecycle events are plumbed in. -->
+<!-- DEFERRED TO PHASE 3 (Codex): host-forwarded transcript via Codex's
+     SessionStart + equivalent lifecycle hooks requires both (a) a Codex-
+     specific hook script (`hooks/hooks.json` config + shell handlers)
+     and (b) a backend route to receive Codex-formatted event payloads.
+     Phase 1 + 2 work on Codex without these — demo capture is thinner
+     but functional (the LLM still observes its own tool calls during a
+     recording session; we just lose the host-forwarded enrichment).
+     Wire this up in Phase 3 once Codex's lifecycle event model is more
+     stable + we have real Codex usage data to tune against. -->
 3. **Host-forwarded transcript** — automatic if the user has the Implexa hooks installed. Every user prompt and assistant response gets forwarded to the backend and stored on the demo. Nothing you need to do.
 
 **Do NOT**:
@@ -109,25 +115,27 @@ You'll get back 3-8 structured questions, each typed (decision / output / signal
 
 ### Step 3d — Ask the user the questions ONE AT A TIME
 
-<!-- TODO (Phase 2 - Codex): The original Claude Code skill uses the AskUserQuestion tool to render
-     multiple-choice options. Codex does not currently expose AskUserQuestion as a built-in.
-     For now, ask each question as a plain text message with the options listed as numbered choices.
-     When Codex gains a native interactive-options primitive, update this section. -->
-
-Every question from Step 3c ships with a `question.options` array of 3-4 plausible answers the user can pick from. Present them as a numbered list:
+Every question from Step 3c ships with a `question.options` array of 3-4 plausible answers the user can pick from. Present them as a numbered list with this exact pattern:
 
 ```
 <question text>
 
-  1. <option.label> — <option.description> (Recommended)
-  2. <option.label> — <option.description>
-  3. <option.label> — <option.description>
-  (Or type your own answer)
+  1. <option.label> (Recommended), <option.description>
+  2. <option.label>, <option.description>
+  3. <option.label>, <option.description>
+
+Reply with the number (1-3) or type your own answer.
 ```
 
-Mark the FIRST option as "(Recommended)" — that's the Haiku-suggested default based on the trace.
+Mark the FIRST option as "(Recommended)", that's the Haiku-suggested default based on the trace.
 
-**Ask one question at a time.** Wait for the answer, then call **`interview_for_skill`** with:
+Parse the user's reply:
+- A single digit 1-3 maps to the labeled option
+- Free text gets treated as the user's custom answer (option 4: Other)
+
+Don't loop on invalid input. If the reply is ambiguous, accept it as free-text and proceed.
+
+**Ask one question at a time.** After each reply, call **`interview_for_skill`** with:
 - `demoId`
 - `step: "answer"`
 - `question`: the verbatim question text
@@ -135,7 +143,7 @@ Mark the FIRST option as "(Recommended)" — that's the Haiku-suggested default 
 
 Then proceed to the next question.
 
-If the user gets impatient ("just do it", "enough", "save it"), STOP and move to finalize — better to ship with partial answers than annoy the user out of the flow.
+If the user gets impatient ("just do it", "enough", "save it"), STOP and move to finalize, better to ship with partial answers than annoy the user out of the flow.
 
 ### Step 3e — Finalize the skill
 
@@ -165,26 +173,32 @@ If status is 'draft', ask: *"Activate this org-wide so anyone can use it? Reply 
 
 ### Step 3f.5 — Offer to schedule it
 
-The finalize response includes a **`recommendedCadences`** field — 4 ranked cadences inferred from the skill's intent + tools + content, plus a "skip" hint. Render this as a numbered list and let the user pick one. This is where most users will decide whether the skill becomes a daily habit or stays ad-hoc.
-
-<!-- TODO (Phase 2 - Codex): AskUserQuestion is Claude Code-specific. Use a plain numbered list here
-     until Codex gains a native multiple-choice input primitive. -->
+The finalize response includes a **`recommendedCadences`** field, 4 ranked cadences inferred from the skill's intent + tools + content, plus a "skip" hint. Render this as a numbered list and let the user pick one. This is where most users will decide whether the skill becomes a daily habit or stays ad-hoc.
 
 Ask:
 
 > *"want to run this on a schedule? i can wire it up now."*
 
-Show the options from `recommendedCadences.options` as a numbered list, plus "Skip - ad-hoc only (you can schedule it anytime with `$implexa-schedule`)". The user can also type a custom schedule like "every 4 hours" or "daily at 6pm".
+Then present the options from `recommendedCadences.options` as a numbered list with this pattern:
+
+```
+  1. <cadence.label> (Recommended), <cadence.description>
+  2. <cadence.label>, <cadence.description>
+  3. <cadence.label>, <cadence.description>
+  4. <cadence.label>, <cadence.description>
+  5. Skip, ad-hoc only (you can schedule it anytime with $implexa-schedule)
+
+Reply with the number (1-5) or type a custom schedule like "every 4 hours" or "daily at 6pm".
+```
+
+Parse the reply:
+- A digit 1-4 → use the corresponding cadence.label
+- `5` / "skip" / "not now" / "later" → skip
+- Free text like "every 4 hours" → use as the custom scheduleNl
 
 Map the reply:
 
 **If the user picks one of the 4 cadences (or types a custom schedule):**
-
-<!-- TODO (Phase 2 - Codex): mcp__scheduled-tasks__create_scheduled_task is a Claude Code-specific
-     scheduled-tasks MCP tool. Codex has its own scheduling mechanism. On Codex, after calling
-     schedule_skill, inform the user of the scheduled_skill_id and prompt from the response and
-     advise them to wire it up via their preferred Codex scheduling method.
-     See: https://developers.openai.com/codex/skills for Codex scheduling conventions. -->
 
 1. Call **`schedule_skill`** with:
    ```jsonc
@@ -195,16 +209,16 @@ Map the reply:
    }
    ```
 
-2. On `ok: true`, the response includes `claudeScheduledTaskPrompt` and `cronExpression`. On Codex, inform the user of these values and ask them to set up a recurring run via their Codex scheduling configuration.
+2. On `ok: true`, the response includes `claudeScheduledTaskPrompt` and `cronExpression`. Hand off to `$implexa-schedule`'s Step 3 (the path picker: system cron / Codex app / GitHub Actions) for the user to wire up the actual trigger. Don't ask the path-picker question here, just tell them: *"manifest registered. run `$implexa-schedule <slug>` to pick a trigger path (system cron / Codex app / GitHub Actions)."* Skip to Step 3g.
 
 3. Confirm to the user, ≤ 2 lines:
 
    ```
    scheduled. runs <humanizedSchedule>. output lands at app.implexa.ai/runs.
-   manage at app.implexa.ai/scheduled.
+   next: pick a trigger path via $implexa-schedule.
    ```
 
-**If the user picks "Skip - ad-hoc only" (or replies "skip" / "not now" / "later"):**
+**If the user picks "Skip" (or replies "skip" / "not now" / "later"):**
 
 Tell them: *"saved. you can schedule it anytime with `$implexa-schedule <slug>`."* Move to Step 3g.
 

@@ -94,19 +94,20 @@ fuzzy match against your library. Codex picks the right skill and applies it wit
 
 ---
 
-## phase 1 — what works and what's deferred
+## what works
 
-shipping this fast. these limits are documented + tracked, fixes coming in phase 2:
-
-| capability | works on codex? | phase 2 fix |
+| capability | works on codex? | status |
 |---|---|---|
-| `$implexa-record-skill` (capture a workflow) | ✓ works | demo capture is thinner than claude code until codex lifecycle hooks (SessionStart, etc.) wire in |
-| `$implexa-run` (re-execute a skill) | ✓ full parity | nothing to fix |
-| `$implexa-share-this` + forking + outcome attribution | ✓ full parity | nothing to fix |
-| `$implexa-publish-to-clawhub` | ✓ full parity | nothing to fix |
-| `$implexa-schedule` (cron-based scheduling) | **partial** | manifest registers in our backend, but codex doesn't have a built-in cron mechanism. you'd run `$implexa-run-scheduled <id>` manually or wire your own cron / launchd / systemd loop until v2 ships a server-side scheduler |
-| interactive multi-choice prompts in record/update flows | **degraded** | falls back to plain text input on codex. claude code has a native picker; codex doesn't yet. functional, just less polished |
-| `slack-plugin` destination for scheduler outputs | not supported | use `slack-webhook` destination instead. cross-vendor, just needs a `hooks.slack.com` URL |
+| `$implexa-record-skill` | ✓ works | demo capture is thinner than Claude Code (Phase 3 fix: wire Codex SessionStart hooks) |
+| `$implexa-run` | ✓ full parity | done |
+| `$implexa-share-this` + forking + outcome attribution | ✓ full parity | done |
+| `$implexa-publish-to-clawhub` | ✓ full parity | done |
+| `$implexa-schedule` (system cron) | ✓ works | **NEW v0.11.0** |
+| `$implexa-schedule` (Codex app Automations) | ✓ works | **NEW v0.11.0** |
+| `$implexa-schedule` (GitHub Actions) | ✓ works | **NEW v0.11.0** |
+| interactive multi-choice prompts in record/update | ✓ works (numbered-list fallback) | **NEW v0.11.0** |
+| `slack-webhook` destination for scheduler outputs | ✓ full parity | done |
+| `slack-plugin` destination | not supported on Codex | use `slack-webhook` instead. graceful failure documented |
 
 the rest is full parity. backend is identical across both runtimes.
 

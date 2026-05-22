@@ -9,6 +9,8 @@ Invoked by the agent runtime's scheduler when a recurring Implexa schedule fires
 
 Argument: `<scheduled_skill_id>` (a UUID, passed positionally).
 
+**Execution context on Codex.** This skill is almost always invoked via `codex exec "$implexa-run-scheduled <uuid>"` from a system cron job, GitHub Actions workflow, or the Codex desktop app's Automations panel. That means: **no interactive user is attached.** All output goes to stdout (where it gets captured by the trigger's log) and the persistence layer (skill_runs row + optional Slack delivery) is the only surface the user actually sees. Do not try to render interactive output or wait for user replies during a scheduled run, none of it will land anywhere useful.
+
 ---
 
 ## Step 1 — Resolve the schedule manifest
@@ -49,47 +51,30 @@ If the underlying skill is itself an orchestrator (chains multiple sub-skills vi
 
 If execution throws or returns unusable output, mark status as `failed` and pass the failure summary as `outputMarkdown` (so the user sees what went wrong in /runs).
 
-## Step 2.5 — Deliver to Slack via the Slack plugin (only when destination.type === "slack-plugin")
+## Step 2.5 — Deliver to Slack via webhook ONLY (Codex)
 
-**Skip this step entirely if destination.type is "dashboard" or "slack-webhook".** Only run when the destination from Step 1 is `{ type: "slack-plugin", target: "<channel>" }`.
+Codex doesn't have a Claude Code Slack plugin equivalent. If destination.type
+is "slack-plugin", we can't deliver via plugin and must short-circuit:
 
-<!-- TODO (Phase 2 - Codex): mcp__plugin_engineering_slack__send_message is a Claude Code Slack plugin tool.
-     On Codex, use the equivalent Slack integration available in the current session.
-     If no Slack integration is available, build a pluginDelivery receipt with delivered=false and
-     continue to Step 3 — the run will still be persisted. -->
+If `destination.type === "slack-plugin"`:
+  Stop here. Set `pluginDelivery` to:
+  ```jsonc
+  {
+    "delivered": false,
+    "error": "slack-plugin destination is Claude Code-only on Codex runtime. Switch this schedule to slack-webhook destination."
+  }
+  ```
+  Skip the Slack send step entirely. Proceed to Step 3 (`record_scheduled_run`)
+  with `status="partial"` + the `pluginDelivery` error noted.
 
-Convert the markdown output to Slack `mrkdwn` format with a one-pass rewrite:
+If `destination.type === "slack-webhook"`:
+  Run the webhook POST as before. (Cross-vendor, works identically on Codex
+  and Claude Code, the backend handles the actual HTTP POST server-side when
+  you call `record_scheduled_run`, so there's nothing for you to do here
+  beyond setting `status="completed"`.)
 
-- `**bold**` → `*bold*`
-- `## Heading` → `*Heading*`
-- `### Subheading` → `*Subheading*`
-- `[text](url)` → `<url|text>`
-
-Bullets, inline code, and code blocks pass through unchanged.
-
-Then prepend a small headline so the channel sees what skill ran:
-
-```
-*<skill_slug>* — <YYYY-MM-DD>
-
-<converted markdown body>
-```
-
-Attempt to send the message to `destination.target`. Capture the result into a `pluginDelivery` object:
-
-```jsonc
-{
-  "delivered": true,                // false if the tool returned an error
-  "channel":   "#standup",          // echo back the target so /runs shows it
-  "messageTs": "<ts>"               // Slack's message timestamp, if returned
-  // OR on failure:
-  "error":     "<error string>"
-}
-```
-
-You will pass this into the next step.
-
-**If no Slack integration is available**, build a `pluginDelivery` of `{ delivered: false, error: "Slack integration not available in this session" }` and continue to Step 3. The run is still persisted; the user will see the failure receipt in /runs and can re-deliver or fix the integration.
+If `destination.type === "dashboard"`:
+  No Slack send needed. Proceed to Step 3.
 
 ## Step 3 — Persist + deliver
 
@@ -106,12 +91,12 @@ Call **`record_scheduled_run`** with:
 }
 ```
 
-**`pluginDelivery` is REQUIRED when destination.type=`slack-plugin`** and forbidden otherwise. The backend uses it to record the slack delivery receipt on the skill_runs row.
+**`pluginDelivery` is REQUIRED when destination.type=`slack-plugin`** and forbidden otherwise. On Codex the only `slack-plugin` payload you'll ever set is the graceful-fail receipt from Step 2.5 (`delivered: false`, error explaining the user should switch to slack-webhook). The backend records this receipt on the skill_runs row so the user sees the failure in /runs.
 
 The tool:
 - Inserts a `skill_runs` row (always, even if delivery failed at step 2.5)
 - For destination=slack-webhook: backend POSTs to the webhook URL (here, server-side)
-- For destination=slack-plugin: backend records the agent-side delivery receipt from `pluginDelivery`
+- For destination=slack-plugin: backend records the agent-side delivery receipt from `pluginDelivery` (on Codex this is always the graceful-fail receipt)
 - For destination=dashboard: no external delivery, just persist
 - Bumps the parent `scheduled_skills.run_count` + `last_run_at`
 
@@ -130,7 +115,8 @@ If you must produce any output (the agent runtime may require a final assistant 
 Where `<delivery summary>` is:
 - `Persisted to dashboard.` (dashboard-only)
 - `Persisted to dashboard. Posted to Slack.` (Slack ok)
-- `Persisted to dashboard. Slack delivery failed: <error>.` (Slack failed — the user will see this in /runs and can re-deliver)
+- `Persisted to dashboard. Slack delivery failed: <error>.` (Slack failed, the user will see this in /runs and can re-deliver)
+- `Persisted to dashboard. slack-plugin not supported on Codex, switch to slack-webhook.` (the Codex graceful-fail case from Step 2.5)
 
 ## Notes for the model
 
