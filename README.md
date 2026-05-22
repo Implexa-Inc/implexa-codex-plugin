@@ -94,6 +94,24 @@ fuzzy match against your library. Codex picks the right skill and applies it wit
 
 ---
 
+## phase 1 — what works and what's deferred
+
+shipping this fast. these limits are documented + tracked, fixes coming in phase 2:
+
+| capability | works on codex? | phase 2 fix |
+|---|---|---|
+| `$implexa-record-skill` (capture a workflow) | ✓ works | demo capture is thinner than claude code until codex lifecycle hooks (SessionStart, etc.) wire in |
+| `$implexa-run` (re-execute a skill) | ✓ full parity | nothing to fix |
+| `$implexa-share-this` + forking + outcome attribution | ✓ full parity | nothing to fix |
+| `$implexa-publish-to-clawhub` | ✓ full parity | nothing to fix |
+| `$implexa-schedule` (cron-based scheduling) | **partial** | manifest registers in our backend, but codex doesn't have a built-in cron mechanism. you'd run `$implexa-run-scheduled <id>` manually or wire your own cron / launchd / systemd loop until v2 ships a server-side scheduler |
+| interactive multi-choice prompts in record/update flows | **degraded** | falls back to plain text input on codex. claude code has a native picker; codex doesn't yet. functional, just less polished |
+| `slack-plugin` destination for scheduler outputs | not supported | use `slack-webhook` destination instead. cross-vendor, just needs a `hooks.slack.com` URL |
+
+the rest is full parity. backend is identical across both runtimes.
+
+---
+
 ## the skill graph flywheel
 
 every team has a few power users with integrations already wired (HubSpot, Salesforce, Linear, GitHub, Apollo, etc.). implexa turns their expertise into portable skills the rest of the org can invoke.
