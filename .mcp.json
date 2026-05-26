@@ -1,8 +1,5 @@
 {
   "implexa": {
-    "url": "https://core.implexa.ai/api/v2/mcp",
-    "headers": {
-      "Authorization": "Bearer ${IMPLEXA_API_KEY}"
-    }
+    "url": "https://core.implexa.ai/api/v2/mcp?api_key=${IMPLEXA_API_KEY}"
   }
 }

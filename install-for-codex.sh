@@ -283,28 +283,31 @@ fi
 
 # ─── 6. Write MCP server config to ~/.codex/config.toml (idempotent) ────
 #
-# Codex 0.50+ enforces the canonical MCP HTTP transport format. The
-# `bearer_token` field is only accepted for stdio transports; for
-# streamable_http (which is what we use, since we have a URL not a
-# command), auth has to live in the `headers` inline table:
+# Auth-via-query-param. Codex's rmcp streamable_http client does NOT honor
+# the `headers = { Authorization = ... }` field in config.toml (verified
+# 2026-05-27: codex sends every request WITHOUT the Authorization header
+# even when headers is set, then surfaces a 401 from the upstream server
+# as the actual error). It also rejects `bearer_token` for streamable_http
+# transports. The only auth pattern that works reliably is embedding the
+# API key in the URL as a query parameter.
 #
-#   [mcp_servers.implexa]
-#   url = "https://core.implexa.ai/api/v2/mcp"
-#   headers = { Authorization = "Bearer imp_live_..." }
+# Our backend's verifyApiKey middleware accepts `?api_key=imp_live_...` as
+# a first-class authentication method (set up specifically for clients
+# that can't customize headers).
 #
-# Previous versions of this installer wrote `bearer_token = ...` which
-# codex now rejects with:
-#   "bearer_token is not supported for streamable_http in mcp_servers.implexa"
+# Trade-off: the key appears in URL form, which means it's visible in any
+# request log that captures URLs. Same security profile as the key being
+# in ~/.codex/config.toml at all — both are local-file secrets.
 #
 # Strategy:
 #   - If config.toml doesn't exist → create with canonical block.
-#   - If it exists with ANY [mcp_servers.implexa] block (old or new
-#     format) → backup, strip the old block in place, append fresh.
+#   - If it exists with ANY [mcp_servers.implexa] block (any format) →
+#     backup, strip cleanly, append fresh.
 #   - Never touch [mcp_servers.*] blocks for other servers.
 
+MCP_URL="https://core.implexa.ai/api/v2/mcp?api_key=$API_KEY"
 MCP_BLOCK="[mcp_servers.implexa]
-url = \"https://core.implexa.ai/api/v2/mcp\"
-headers = { Authorization = \"Bearer $API_KEY\" }"
+url = \"$MCP_URL\""
 
 if [ ! -f "$CONFIG_TOML" ]; then
   # Fresh file — just write the block.
