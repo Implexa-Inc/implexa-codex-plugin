@@ -439,6 +439,59 @@ if ! install_skill_files; then
   print_skill_fallback
 fi
 
+# ─── 7b. Register the plugin in config.toml ─────────────────────────────
+#
+# Cached skill files alone don't make $implexa-* commands surface. Codex
+# only loads plugins that are explicitly registered via two TOML blocks:
+#
+#   [marketplaces.implexa]
+#   source_type = "local"
+#   source = "<path to cloned marketplace>"
+#
+#   [plugins."implexa@implexa"]
+#   enabled = true
+#
+# Plugin id pattern is "<plugin-name>@<marketplace-name>". Both are
+# "implexa" for us.
+#
+# Idempotent: if the blocks already exist, skip; if they're partially
+# present, repair. Never touches other [marketplaces.*] / [plugins."*"]
+# blocks.
+
+register_plugin_in_config() {
+  if [ ! -f "$CONFIG_TOML" ]; then
+    err "config.toml missing — can't register plugin"
+    return 1
+  fi
+
+  local needs_marketplace=0
+  local needs_plugin=0
+
+  if ! grep -q '^\[marketplaces\.implexa\]' "$CONFIG_TOML"; then
+    needs_marketplace=1
+  fi
+  if ! grep -q '^\[plugins\.\"implexa@implexa\"\]' "$CONFIG_TOML"; then
+    needs_plugin=1
+  fi
+
+  if [ $needs_marketplace -eq 0 ] && [ $needs_plugin -eq 0 ]; then
+    ok "Plugin already registered in config.toml"
+    return 0
+  fi
+
+  if [ $needs_marketplace -eq 1 ]; then
+    printf '\n[marketplaces.implexa]\nsource_type = "local"\nsource = "%s"\n' "$MARKETPLACE_DIR" >> "$CONFIG_TOML"
+  fi
+  if [ $needs_plugin -eq 1 ]; then
+    printf '\n[plugins."implexa@implexa"]\nenabled = true\n' >> "$CONFIG_TOML"
+  fi
+
+  ok "Registered [marketplaces.implexa] + [plugins.\"implexa@implexa\"] in config.toml"
+  return 0
+}
+
+register_plugin_in_config || warn "couldn't register plugin in config.toml — \$implexa-* commands won't surface until you add the blocks manually"
+
 # ─── 8. Done ─────────────────────────────────────────────────────────────
 echo ""
 echo "${C_BOLD}${C_GREEN}setup complete.${C_RESET}"
