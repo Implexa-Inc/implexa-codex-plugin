@@ -1,6 +1,6 @@
 ---
 name: schedule
-description: Schedule any installed skill to run on a recurring schedule (daily, weekly, hourly) with output delivered to the Implexa dashboard or to a Slack channel via incoming webhook. Use when the user says "schedule this skill", "run X daily", "every morning run Y", "set up a daily standup", "auto-run my morning brief", "run hackernews-and-x-comment-drafter every day at 9am", or invokes $implexa-schedule. THE Implexa-native scheduling primitive — replaces ad-hoc "schedule this for me" requests with a real registered manifest, persistent output log, and optional Slack delivery. Wraps Codex's scheduling mechanism with the manifest + destination layer Codex alone doesn't provide.
+description: 'Schedule any installed skill to run on a recurring schedule (daily, weekly, hourly) with output delivered to the Implexa dashboard or to a Slack channel via incoming webhook. Use when the user says "schedule this skill", "run X daily", "every morning run Y", "set up a daily standup", "auto-run my morning brief", "run hackernews-and-x-comment-drafter every day at 9am", or invokes $implexa-schedule. THE Implexa-native scheduling primitive — replaces ad-hoc "schedule this for me" requests with a real registered manifest, persistent output log, and optional Slack delivery. Wraps Codex''s scheduling mechanism with the manifest + destination layer Codex alone doesn''t provide.'
 ---
 
 # Schedule a skill to run recurringly

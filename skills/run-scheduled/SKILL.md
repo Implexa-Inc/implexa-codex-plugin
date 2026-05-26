@@ -1,6 +1,6 @@
 ---
 name: run-scheduled
-description: Internal callback skill invoked by the agent runtime's scheduler when a recurring Implexa schedule fires. Use ONLY when the agent is dispatched via a scheduled task with a prompt like "$implexa-run-scheduled <uuid>" — humans should not invoke this directly. THE Implexa scheduler execution path — resolves the manifest, executes the underlying skill, persists output + delivers to Slack/dashboard. Pairs with $implexa-schedule (registration) and forms the callback half of the scheduler primitive.
+description: 'Internal callback skill invoked by the agent runtime''s scheduler when a recurring Implexa schedule fires. Use ONLY when the agent is dispatched via a scheduled task with a prompt like "$implexa-run-scheduled <uuid>" — humans should not invoke this directly. THE Implexa scheduler execution path — resolves the manifest, executes the underlying skill, persists output + delivers to Slack/dashboard. Pairs with $implexa-schedule (registration) and forms the callback half of the scheduler primitive.'
 ---
 
 # Run a scheduled skill (internal callback)
