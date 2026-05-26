@@ -1,7 +1,8 @@
 {
   "implexa": {
-    "type": "http",
     "url": "https://core.implexa.ai/api/v2/mcp",
-    "bearer_token": "${IMPLEXA_API_KEY}"
+    "headers": {
+      "Authorization": "Bearer ${IMPLEXA_API_KEY}"
+    }
   }
 }

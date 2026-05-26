@@ -341,19 +341,116 @@ else
   fi
 fi
 
-# ─── 7. Done ─────────────────────────────────────────────────────────────
+# ─── 7. Install plugin skills into Codex's plugin cache ──────────────────
+#
+# Codex's MCP config (the block we wrote above) only exposes the MCP
+# *tools* to the model. It does NOT install the SKILL.md files that
+# define the $implexa-* slash commands. Those have to live at codex's
+# canonical plugin cache path:
+#
+#   ~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/skills/
+#
+# Mimics what `codex plugin install` does internally — clone the repo
+# into a marketplace dir, copy to the versioned cache, substitute the
+# resolved API key into the cached .mcp.json. Failure here is
+# NON-FATAL: the MCP tools still work, the user just won't see
+# $implexa-* slash commands. We log a clear warning + a manual command
+# they can run.
+#
+# Note: codex reads these paths on launch. Restart codex (close all
+# sessions, reopen) to pick up newly-installed plugins.
+
+MARKETPLACE_DIR="$CODEX_DIR/marketplaces/implexa"
+PLUGIN_REPO_URL="https://github.com/Implexa-Inc/implexa-codex-plugin.git"
+PLUGIN_CACHE_BASE="$CODEX_DIR/plugins/cache/implexa/implexa"
+
+print_skill_fallback() {
+  warn "Couldn't auto-install the Implexa skill files into Codex's plugin cache."
+  echo "    The MCP tools still work — you can invoke them via natural language"
+  echo "    (\"implexa, run a skill for X\"). The \$implexa-* slash commands need"
+  echo "    the plugin install to complete."
+  echo ""
+}
+
+install_skill_files() {
+  command -v git >/dev/null 2>&1 || { warn "git not found — can't clone plugin repo"; return 1; }
+
+  mkdir -p "$CODEX_DIR/marketplaces" || return 1
+  mkdir -p "$(dirname "$PLUGIN_CACHE_BASE")" || return 1
+
+  # 1. Clone or refresh the marketplace source.
+  if [ -d "$MARKETPLACE_DIR/.git" ]; then
+    info "Updating Implexa plugin marketplace..."
+    if ! (cd "$MARKETPLACE_DIR" && git fetch --quiet origin main && git reset --hard --quiet origin/main); then
+      warn "git refresh failed (keeping existing copy)"
+    fi
+  else
+    info "Cloning Implexa plugin marketplace..."
+    if ! git clone --quiet --depth 1 "$PLUGIN_REPO_URL" "$MARKETPLACE_DIR"; then
+      err "git clone failed (network issue?)"
+      return 1
+    fi
+  fi
+
+  # 2. Read the version from the plugin manifest.
+  local plugin_json="$MARKETPLACE_DIR/.codex-plugin/plugin.json"
+  if [ ! -f "$plugin_json" ]; then
+    err "plugin.json missing after clone: $plugin_json"
+    return 1
+  fi
+  local plugin_version
+  plugin_version=$(jq -r '.version // "0.11.0"' "$plugin_json")
+  local cache_dir="$PLUGIN_CACHE_BASE/$plugin_version"
+
+  # 3. Copy into the versioned cache. Strip .git to keep the cache lean.
+  rm -rf "$cache_dir"
+  mkdir -p "$cache_dir"
+  if ! cp -R "$MARKETPLACE_DIR/." "$cache_dir/"; then
+    err "Failed to copy plugin to $cache_dir"
+    return 1
+  fi
+  rm -rf "$cache_dir/.git"
+
+  # 4. Substitute the resolved API key into the cached .mcp.json. The
+  # upstream .mcp.json has `${IMPLEXA_API_KEY}` as a placeholder; codex
+  # does NOT do env-var substitution in plugin .mcp.json files, so we
+  # write the real key. (Same security profile as the
+  # [mcp_servers.implexa] block in config.toml — key on disk in
+  # plaintext under ~/.codex/. chmod 600 below.)
+  if [ -f "$cache_dir/.mcp.json" ]; then
+    # Use a portable sed pattern that works on both BSD (macOS) and GNU sed.
+    # Escape the API key for sed: the only meta we care about is '/'.
+    local escaped_key
+    escaped_key=$(printf '%s' "$API_KEY" | sed 's:/:\\/:g')
+    sed "s/\${IMPLEXA_API_KEY}/$escaped_key/g" "$cache_dir/.mcp.json" > "$cache_dir/.mcp.json.tmp" \
+      && mv "$cache_dir/.mcp.json.tmp" "$cache_dir/.mcp.json"
+    chmod 600 "$cache_dir/.mcp.json" 2>/dev/null || true
+  fi
+
+  ok "Installed $plugin_version skill files at $cache_dir"
+  ok "$(ls "$cache_dir/skills" 2>/dev/null | wc -l | tr -d ' ') \$implexa-* commands available after Codex restart"
+  return 0
+}
+
+if ! install_skill_files; then
+  print_skill_fallback
+fi
+
+# ─── 8. Done ─────────────────────────────────────────────────────────────
 echo ""
 echo "${C_BOLD}${C_GREEN}setup complete.${C_RESET}"
 echo ""
 echo "${C_BOLD}verify it works:${C_RESET}"
-echo "  1. open a new Codex session: ${C_BOLD}codex${C_RESET}"
-echo "  2. type: ${C_BOLD}\$implexa-get-me-started${C_RESET}"
-echo "  3. you should see: your Implexa identity + a quick-win Playbook run"
+echo "  1. fully quit Codex (close all sessions + the desktop app)"
+echo "  2. relaunch: ${C_BOLD}codex${C_RESET}"
+echo "  3. type: ${C_BOLD}\$implexa-get-me-started${C_RESET}"
+echo "  4. you should see: your Implexa identity + a quick-win Playbook run"
 echo ""
 echo "${C_BOLD}what's installed:${C_RESET}"
 echo "  - MCP server: https://core.implexa.ai/api/v2/mcp (Streamable HTTP)"
-echo "  - 14 skills: record, run, schedule, share, fork, playbooks, and more"
+echo "  - 18 skills: record, run, suggest, schedule, share, fork, playbooks, and more"
 echo "  - Config: $CONFIG_TOML"
+echo "  - Plugin cache: $PLUGIN_CACHE_BASE"
 echo ""
 echo "full docs at https://implexa.ai"
 echo ""
