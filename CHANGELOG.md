@@ -11,6 +11,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > release. Only changes to skills, the plugin manifest, or install scripts
 > warrant a version bump.
 
+## [0.12.0] — 2026-05-27
+
+Consolidate the skill-invocation surface from 18 to 7 visible commands
+(plus 1 internal callback). The long tail moves to natural-language
+invocation; the underlying MCP tools stay exposed, so asks like "fork
+this skill", "give me my morning brief", "publish my X to ClawHub",
+"show me skill ROI" still route correctly without a memorized invocation.
+
+### The final 7 (autocomplete-discoverable)
+
+| invocation | what it does |
+|---|---|
+| `$implexa-suggest` | find skills (active search or passive buffer pull) |
+| `$implexa-run` | unified recommender across library + cross-vendor graph |
+| `$implexa-record` | capture a workflow as a skill — 3 entry intents in one flow |
+| `$implexa-my-skills [scope]` | browse libraries — personal (default) / team / org / public |
+| `$implexa-schedule` | schedule any skill on a recurrence |
+| `$implexa-share-this` | team-gated or public share link |
+| `$implexa-help` | command list + your current credit balance |
+
+Plus `$implexa-run-scheduled` internally (the scheduler callback fired by
+system cron / Codex Automations / GitHub Actions).
+
+### Merges
+
+- `$implexa-save-this` + `$implexa-update-skill` → folded into
+  `$implexa-record`. Three entry intents in one flow:
+  - **Branch A** — new skill via live demonstration
+  - **Branch B** — post-hoc save via `capture_workflow_as_skill`
+  - **Branch C** — update existing via re-record, finalize with `replacingSkillId`
+- `$implexa-org-skills` + `$implexa-playbooks` → folded into `$implexa-my-skills`
+  via a `scope` argument: `personal` (default) / `team` / `org` / `public`.
+- `$implexa-credits` → folded into `$implexa-help` (balance shown at the top).
+
+### Removed (now natural-language only)
+
+- `$implexa-fork` — say "fork this skill" / "fork the X Playbook into my org"
+- `$implexa-morning` — say "give me my morning brief"
+- `$implexa-skill-roi` — say "show me skill ROI" / "which skills are driving outcomes"
+- `$implexa-publish-to-clawhub` — say "publish my X to ClawHub"
+- `$implexa-get-me-started` — first-run flow now lives in the install script's
+  "next steps" output
+
+### Updated
+
+- `install-for-codex.sh` — final "what's installed" line lists the 7 commands;
+  next-steps message points at `$implexa-help` instead of `$implexa-get-me-started`.
+
+### Migration
+
+Users on 0.11.x who memorized the old invocations can either switch to the
+new shape (`$implexa-record` instead of `$implexa-record-skill`, `$implexa-my-skills team`
+instead of `$implexa-org-skills`, etc.) or just ask in natural language —
+the MCP tools the old invocations fronted are still exposed.
+
 ## [0.11.0] — 2026-05-21
 
 Phase 2 ship. Resolves 3 of 4 Phase 1 TODOs (4th — host hooks — deferred

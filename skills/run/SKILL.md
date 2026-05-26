@@ -202,7 +202,7 @@ If the user picks one:
   OR org_skill_id from the apply response).
 - improve → ask "what would you change?", capture the answer as
   `comment`, then call submit_skill_feedback with rating="improve" +
-  the comment, then chain into `$implexa-update-skill`.
+  the comment, then chain into `$implexa-record`.
 
 If the user types anything that isn't a clear like/dislike/improve,
 treat it as "keep going" and do nothing. Silence is the most common
@@ -215,4 +215,4 @@ path; don't nag.
 | `Skill not found` | Bad slug after the user picked one | Re-list with `list_org_skills` + `recommend_skills_for_context`, retry with the correct slug. |
 | `Forbidden` | Trying to apply a private skill they don't own | "That skill is private to its creator. Want to fork it via `$implexa-fork` instead?" |
 | `Skill is archived` / `draft` | Status check failed | "That skill is in {status} state — only active skills can be applied. Ask the creator to activate it, or fork your own copy." |
-| Both backends return 0 hits | Genuine no-match | "I couldn't find a saved skill OR a cross-vendor match for 'X'. Run `$implexa-record-skill` to capture this workflow as a new skill, or check the full index at https://implexa.ai/search" |
+| Both backends return 0 hits | Genuine no-match | "I couldn't find a saved skill OR a cross-vendor match for 'X'. Run `$implexa-record` to capture this workflow as a new skill, or check the full index at https://implexa.ai/search" |
