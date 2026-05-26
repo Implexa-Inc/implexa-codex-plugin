@@ -222,19 +222,53 @@ case "$API_KEY" in
 esac
 
 # ─── 4. Validate the key ─────────────────────────────────────────────────
+# Capture http status separately so we can surface meaningful errors instead
+# of silently exiting on a 401/403/timeout. The previous version trusted
+# `err` to print to stderr, but in the curl|bash pipe context some terminals
+# buffer stderr separately and the user sees nothing before the script exits.
+# Writing everything to stdout (with explicit flushes) is more reliable.
 info "Validating API key against $API_BASE/api/v2/auth/whoami..."
-WHOAMI_RESPONSE=$(curl -sS "$API_BASE/api/v2/auth/whoami" \
-  -H "Authorization: Bearer $API_KEY" 2>&1 || echo '{"error":"network error"}')
+
+WHOAMI_TMP=$(mktemp -t implexa-whoami.XXXXXX) || WHOAMI_TMP="/tmp/implexa-whoami.$$"
+WHOAMI_HTTP=$(curl -sS -w '%{http_code}' -o "$WHOAMI_TMP" \
+  --connect-timeout 10 --max-time 15 \
+  "$API_BASE/api/v2/auth/whoami" \
+  -H "Authorization: Bearer $API_KEY" 2>"$WHOAMI_TMP.err" || echo 'curl-failed')
+WHOAMI_RESPONSE=$(cat "$WHOAMI_TMP" 2>/dev/null || true)
+WHOAMI_CURL_ERR=$(cat "$WHOAMI_TMP.err" 2>/dev/null || true)
+rm -f "$WHOAMI_TMP" "$WHOAMI_TMP.err"
+
 WHOAMI_EMAIL=$(echo "$WHOAMI_RESPONSE" | jq -r '.email // .user.email // empty' 2>/dev/null)
 WHOAMI_ERROR=$(echo "$WHOAMI_RESPONSE" | jq -r '.error // empty' 2>/dev/null)
 
 if [ -z "$WHOAMI_EMAIL" ]; then
-  if [ -n "$WHOAMI_ERROR" ]; then
-    err "API key validation failed: $WHOAMI_ERROR"
-  else
-    err "API key validation failed — couldn't reach $API_BASE or key is invalid."
-  fi
-  err "Double-check your key at https://app.implexa.ai/settings/api-keys"
+  # Print to stdout (not stderr) so curl|bash users always see it.
+  echo ""
+  echo "${C_RED}✗${C_RESET} API key validation failed."
+  echo "  HTTP status: ${WHOAMI_HTTP:-(no response)}"
+  [ -n "$WHOAMI_ERROR" ] && echo "  Error: $WHOAMI_ERROR"
+  [ -n "$WHOAMI_CURL_ERR" ] && echo "  curl: $WHOAMI_CURL_ERR"
+  echo ""
+  case "$WHOAMI_HTTP" in
+    401|403)
+      echo "Your API key is rejected by the server. It may be revoked, expired,"
+      echo "or never existed. Common cause: a stale IMPLEXA_API_KEY env var from"
+      echo "an earlier install attempt. Fix:"
+      echo ""
+      echo "    unset IMPLEXA_API_KEY"
+      echo "    curl -fsSL https://core.implexa.ai/install-for-codex.sh | bash"
+      echo ""
+      echo "Or grab a fresh key at https://app.implexa.ai/settings/api-keys"
+      ;;
+    000|curl-failed|"")
+      echo "Couldn't reach $API_BASE. Check your network, then retry."
+      ;;
+    *)
+      echo "Unexpected response from $API_BASE."
+      [ -n "$WHOAMI_RESPONSE" ] && echo "Body: $WHOAMI_RESPONSE"
+      echo "Get a fresh key at https://app.implexa.ai/settings/api-keys"
+      ;;
+  esac
   exit 1
 fi
 ok "Validated. Connected as $WHOAMI_EMAIL"
