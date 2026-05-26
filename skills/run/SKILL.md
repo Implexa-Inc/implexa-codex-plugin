@@ -165,3 +165,57 @@ Once the skill finishes, mention one of:
 | `Forbidden` | Trying to apply a private skill they don't own | "That skill is private to its creator — only they can run it. Want to fork it via `$implexa-fork` instead?" |
 | `Skill is archived` / `draft` | Status check failed | "That skill is in {status} state — only active skills can be applied. Ask the creator to activate it, or fork your own copy via `$implexa-fork`." |
 | 0 hits across own + org library | The skill the user thinks exists doesn't | "I couldn't find a saved skill matching 'X'. Run `$implexa-my-skills` to see what you have, or `$implexa-record-skill` to capture this workflow as a new skill." |
+
+## Post-run feedback (Like / Dislike / Improve)
+
+After the skill finishes its work, prompt the user with this exact line:
+
+> how was that? **like** (👍), **dislike** (👎), or **improve** (✏️) — or just keep going
+
+The id you'll need is whichever apply call returned: either
+`aggregated_skill_id` (cross-vendor apply via apply_recommended_skill)
+or `org_skill_id` (org library apply via apply_org_skill). Always
+also pass `applied_skill_event_id` so we can attribute the rating
+to the specific run.
+
+### like (positive signal)
+
+Call `mcp__implexa__submit_skill_feedback` with:
+```json
+{ "aggregated_skill_id" or "org_skill_id": "...",
+  "rating": "like",
+  "applied_skill_event_id": "..." }
+```
+Reply briefly: `noted, that helps the rank. keep going.`
+
+### dislike (negative signal)
+
+Call `mcp__implexa__submit_skill_feedback` with:
+```json
+{ "...": "...", "rating": "dislike", "applied_skill_event_id": "..." }
+```
+Optionally ask "anything specific?" — if the user answers, pass that as
+`comment`. Reply briefly: `got it, dropping the rank. try $implexa-suggest for an alternative.`
+
+### improve (re-record path)
+
+Ask the user: "what would you change about this skill?" — capture their
+answer as the comment.
+
+Then call `mcp__implexa__submit_skill_feedback` with:
+```json
+{ "...": "...", "rating": "improve",
+  "comment": "<the user's answer>",
+  "applied_skill_event_id": "..." }
+```
+
+The tool returns `nextAction` instructing you to chain into update-skill.
+Invoke `$implexa-update-skill` referencing the skill the user just ran.
+The user's improvement comment becomes the starting context for the
+re-record session.
+
+### no response (user just keeps working)
+
+If the user types anything that isn't a clear like/dislike/improve, treat
+it as "keep going" and do nothing. Silence is the most common path; don't
+nag the user into rating every run.
