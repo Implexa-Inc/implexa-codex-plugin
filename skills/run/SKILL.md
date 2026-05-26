@@ -67,7 +67,7 @@ Call **`list_org_skills`** with:
 - **0 hits anywhere (including the public library)** → tell the user no
   matching skill found and offer:
   - "Run `$implexa-my-skills` to see your full library"
-  - "Capture this as a new skill via `$implexa-record-skill`"
+  - "Capture this as a new skill via `$implexa-record`"
   - "Browse public skills at https://app.implexa.ai/skills"
 
 ### Be greedy on the match
@@ -128,8 +128,8 @@ Once the skill finishes, mention one of:
 
 - `Run a different skill`
 - `Show me all my skills` (`$implexa-my-skills`)
-- `Show me my org's skills` (`$implexa-org-skills`)
-- `Save this workflow as a new skill` (`$implexa-record-skill`)
+- `Show me the team's library` (`$implexa-my-skills team`)
+- `Save this workflow as a new skill` (`$implexa-record`)
 
 ## Notes for the model
 
@@ -162,9 +162,9 @@ Once the skill finishes, mention one of:
 | Error | Diagnosis | Tell the user |
 |---|---|---|
 | `Skill not found` | Bad slug after the user picked one | Re-list with `list_org_skills`, then retry with the correct slug. |
-| `Forbidden` | Trying to apply a private skill they don't own | "That skill is private to its creator — only they can run it. Want to fork it via `$implexa-fork` instead?" |
-| `Skill is archived` / `draft` | Status check failed | "That skill is in {status} state — only active skills can be applied. Ask the creator to activate it, or fork your own copy via `$implexa-fork`." |
-| 0 hits across own + org library | The skill the user thinks exists doesn't | "I couldn't find a saved skill matching 'X'. Run `$implexa-my-skills` to see what you have, or `$implexa-record-skill` to capture this workflow as a new skill." |
+| `Forbidden` | Trying to apply a private skill they don't own | "That skill is private to its creator — only they can run it. Want to fork it? Just say 'fork this skill' and the model will run fork_org_skill." |
+| `Skill is archived` / `draft` | Status check failed | "That skill is in {status} state — only active skills can be applied. Ask the creator to activate it, or fork your own copy (just say 'fork it')." |
+| 0 hits across own + org library | The skill the user thinks exists doesn't | "I couldn't find a saved skill matching 'X'. Run `$implexa-my-skills` to see what you have, or `$implexa-record` to capture this workflow as a new skill." |
 
 ## Post-run feedback (Like / Dislike / Improve)
 
@@ -209,9 +209,11 @@ Then call `mcp__implexa__submit_skill_feedback` with:
   "applied_skill_event_id": "..." }
 ```
 
-The tool returns `nextAction` instructing you to chain into update-skill.
-Invoke `$implexa-update-skill` referencing the skill the user just ran.
-The user's improvement comment becomes the starting context for the
+The tool returns `nextAction` instructing you to chain into the update
+flow. Invoke `$implexa-record` (it handles new + post-hoc save + update
+existing) referencing the skill the user just ran. The user's
+improvement comment becomes the starting context for the re-record
+session, which lands on Branch C (update existing via re-record). The
 re-record session.
 
 ### no response (user just keeps working)

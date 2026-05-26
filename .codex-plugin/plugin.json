@@ -1,6 +1,6 @@
 {
   "name": "implexa",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "the skill graph for AI work — record any workflow once via demonstration, get a portable agentskills.io-compliant SKILL.md that runs in Codex, Claude Code, Cursor, Gemini CLI, Hermes, and 30+ more agents. Share with your team (private, org, or public scopes), fork from a public library, and track outcome attribution to see which skills actually moved deals/hires/saves.",
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
