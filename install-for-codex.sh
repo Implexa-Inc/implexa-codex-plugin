@@ -282,44 +282,59 @@ else
 fi
 
 # ─── 6. Write MCP server config to ~/.codex/config.toml (idempotent) ────
-# Strategy:
-#   - If config.toml doesn't exist, create it with just the implexa block.
-#   - If it exists and already has an [mcp_servers.implexa] block, check if
-#     the bearer_token differs. If same, skip. If different, update it.
-#   - Never overwrite other [mcp_servers.*] blocks or unrelated config.
 #
-# We use awk for this — no external dependencies beyond what ships with macOS/Linux.
+# Codex 0.50+ enforces the canonical MCP HTTP transport format. The
+# `bearer_token` field is only accepted for stdio transports; for
+# streamable_http (which is what we use, since we have a URL not a
+# command), auth has to live in the `headers` inline table:
+#
+#   [mcp_servers.implexa]
+#   url = "https://core.implexa.ai/api/v2/mcp"
+#   headers = { Authorization = "Bearer imp_live_..." }
+#
+# Previous versions of this installer wrote `bearer_token = ...` which
+# codex now rejects with:
+#   "bearer_token is not supported for streamable_http in mcp_servers.implexa"
+#
+# Strategy:
+#   - If config.toml doesn't exist → create with canonical block.
+#   - If it exists with ANY [mcp_servers.implexa] block (old or new
+#     format) → backup, strip the old block in place, append fresh.
+#   - Never touch [mcp_servers.*] blocks for other servers.
 
 MCP_BLOCK="[mcp_servers.implexa]
-type = \"http\"
 url = \"https://core.implexa.ai/api/v2/mcp\"
-bearer_token = \"$API_KEY\""
+headers = { Authorization = \"Bearer $API_KEY\" }"
 
 if [ ! -f "$CONFIG_TOML" ]; then
   # Fresh file — just write the block.
   printf '%s\n' "$MCP_BLOCK" > "$CONFIG_TOML"
   ok "Created $CONFIG_TOML with Implexa MCP server config"
 else
-  # File exists — check if [mcp_servers.implexa] section is already present.
+  # File exists. If a [mcp_servers.implexa] section is present (any
+  # format), strip it cleanly and append a fresh canonical block. This
+  # handles both the legacy `bearer_token` format and the canonical
+  # `headers` format equally well.
   if grep -q '^\[mcp_servers\.implexa\]' "$CONFIG_TOML" 2>/dev/null; then
-    # Section exists. Extract current bearer_token value.
-    CURRENT_TOKEN=$(awk '/^\[mcp_servers\.implexa\]/{found=1} found && /bearer_token/{gsub(/[" ]/, ""); split($0,a,"="); print a[2]; exit}' "$CONFIG_TOML")
-    if [ "$CURRENT_TOKEN" = "$API_KEY" ]; then
-      ok "config.toml already has correct Implexa MCP config — no change needed"
-    else
-      # Token differs — replace just the bearer_token line within that section.
-      BACKUP="$CONFIG_TOML.implexa-backup-$(date +%s)"
-      cp "$CONFIG_TOML" "$BACKUP"
-      awk -v new_token="$API_KEY" '
-        /^\[mcp_servers\.implexa\]/ { in_section=1 }
-        /^\[/ && !/^\[mcp_servers\.implexa\]/ { in_section=0 }
-        in_section && /^bearer_token/ { print "bearer_token = \"" new_token "\""; next }
-        { print }
-      ' "$CONFIG_TOML" > "$CONFIG_TOML.tmp.$$" && mv "$CONFIG_TOML.tmp.$$" "$CONFIG_TOML"
-      ok "Updated bearer_token in existing [mcp_servers.implexa] block (backup: $BACKUP)"
-    fi
+    BACKUP="$CONFIG_TOML.implexa-backup-$(date +%s)"
+    cp "$CONFIG_TOML" "$BACKUP"
+
+    # Strip the existing implexa block: start skipping at the section
+    # header, stop skipping when we hit the NEXT [section] header.
+    # Trailing blank lines from the stripped block are tolerated; toml
+    # parsers ignore them.
+    awk '
+      /^\[mcp_servers\.implexa\]/ { skip=1; next }
+      /^\[/ && skip { skip=0 }
+      !skip { print }
+    ' "$CONFIG_TOML" > "$CONFIG_TOML.tmp.$$"
+
+    # Append fresh canonical block.
+    printf '\n%s\n' "$MCP_BLOCK" >> "$CONFIG_TOML.tmp.$$"
+    mv "$CONFIG_TOML.tmp.$$" "$CONFIG_TOML"
+    ok "Migrated [mcp_servers.implexa] to canonical headers format (backup: $BACKUP)"
   else
-    # Section not present — append it.
+    # No existing block — append it.
     echo "" >> "$CONFIG_TOML"
     printf '%s\n' "$MCP_BLOCK" >> "$CONFIG_TOML"
     ok "Appended [mcp_servers.implexa] block to $CONFIG_TOML"
