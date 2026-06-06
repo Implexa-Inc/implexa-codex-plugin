@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > release. Only changes to skills, the plugin manifest, or install scripts
 > warrant a version bump.
 
+## [0.27.1] - 2026-06-06
+
+Sync the Codex plugin up to parity with the Claude plugin (0.27.1). The skill
+set had drifted: Codex was pinned at 0.12.0 while the Claude plugin shipped
+fifteen releases of skill refinements. Since both plugins point at the same
+backend MCP, the runtime tools were always current; this release brings the
+local skill definitions back in line so Codex users get the same guidance.
+
+### Added
+
+- **`edit-workflow` skill.** Revise a generated workflow in place (the Claude
+  plugin's 0.2x addition), now available in Codex too.
+
+### Changed
+
+- **Refreshed `my-skills`, `record`, `run`, `run-scheduled`, `schedule`,
+  `share-this`** to their current Claude-plugin content (new cross-vendor
+  sources, the unified-recommender framing, clearer triggers). Generic
+  agent-routing prose in `run` and `run-scheduled` was generalized away from
+  Claude-specific wording.
+
+### Known follow-up
+
+- The `schedule` / `run-scheduled` skills still describe scheduling via Claude
+  Code's `scheduled-tasks` MCP and `/mcp` flow. Those are concrete operational
+  steps that need Codex-specific equivalents; left as faithful copies for now
+  rather than rewritten with unverified Codex instructions.
+
 ## [0.12.0] — 2026-05-27
 
 Consolidate the skill-invocation surface from 18 to 7 visible commands

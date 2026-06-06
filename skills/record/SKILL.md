@@ -1,6 +1,5 @@
 ---
-name: record
-description: 'Capture a workflow as a structured skill. Three entry intents in one flow: (A) NEW skill via live demonstration, (B) POST-HOC save of work just completed (no demo needed), or (C) UPDATE an existing skill by re-recording. Use when the user says "record a skill", "record this", "watch me do this once", "capture this as a skill", "save this", "save this as a skill", "make that a workflow", "save what we just did", "improve my X skill", "update my X skill by re-recording", "add a step to my Y skill via demo", or invokes $implexa-record. THE killer feature of the Skill Graph — one demonstration becomes a reusable, conditional, measurable skill via a post-hoc structured interview. Absorbs the old $implexa-save-this (now Branch B) and $implexa-update-skill (now Branch C).'
+description: 'Capture a workflow as a structured skill. Three entry intents in one flow: (A) NEW skill via live demonstration, (B) POST-HOC save of work just completed (no demo needed), or (C) UPDATE an existing skill by re-recording. Use when the user says "record a skill", "record this", "watch me do this once", "capture this as a skill", "save this", "save this as a skill", "make that a workflow", "save what we just did", "improve my X skill", "update my X skill by re-recording", "add a step to my Y skill via demo", or invokes /implexa:record. THE killer feature of the Skill Graph — one demonstration becomes a reusable, conditional, measurable skill via a post-hoc structured interview. Absorbs the old /implexa:save-this (now Branch B) and /implexa:update-skill (now Branch C).'
 ---
 
 # Capture a workflow as a skill (3 intents in one flow)
@@ -119,16 +118,7 @@ This is the **observation phase**. Do exactly what the user asks. Run whatever t
 
 1. **external-data tool calls** — automatic. Every Implexa MCP tool you invoke is appended to the demo trace via the session logger. You don't have to do anything.
 2. **Non-Implexa actions** — manual. Any time you use a non-external-data tool (WebSearch, Read, Bash, Write, browser MCP, computer-use, anything outside the Implexa surface), or the user pastes data, or you make a non-obvious decision in your head — call **`record_demo_note`** with a one-sentence summary BEFORE continuing. Example: `record_demo_note({toolName: "web_search", noteText: "Searched G2 for competitor pricing on Snowflake."})`. Silent no-op if no recording active, so safe to call defensively.
-<!-- DEFERRED TO PHASE 3 (Codex): host-forwarded transcript via Codex's
-     SessionStart + equivalent lifecycle hooks requires both (a) a Codex-
-     specific hook script (`hooks/hooks.json` config + shell handlers)
-     and (b) a backend route to receive Codex-formatted event payloads.
-     Phase 1 + 2 work on Codex without these — demo capture is thinner
-     but functional (the LLM still observes its own tool calls during a
-     recording session; we just lose the host-forwarded enrichment).
-     Wire this up in Phase 3 once Codex's lifecycle event model is more
-     stable + we have real Codex usage data to tune against. -->
-3. **Host-forwarded transcript** — automatic if the user has the Implexa hooks installed. Every user prompt and assistant response gets forwarded to the backend and stored on the demo. Nothing you need to do.
+3. **Host-forwarded transcript** — automatic if the user has the Implexa hooks installed in `~/.claude/settings.json`. Every user prompt and assistant response gets forwarded to the backend and stored on the demo. Nothing you need to do.
 
 **Do NOT**:
 - Tell the user what to do next (let them lead)
@@ -149,19 +139,19 @@ When the user signals they're done ("ok done", "that's it", "save it", "stop rec
 
 Call **`end_demonstration`** with the demoId from Phase 1. The system moves the demo into 'interviewing' status and the response tells you what to do next (it'll include `promptForFreeText: true`).
 
-### Step 3b — (Conditional) capture out-of-agent context
+### Step 3b — (Conditional) capture out-of-Claude context
 
 Skip this step in most cases. The host hooks (UserPromptSubmit + Stop + PostToolUse) already capture every prompt, every response, and every tool call during recording — so there's usually nothing left to ask about.
 
-**Only ask the "anything else?" question IF** during recording the user mentioned doing something outside the agent — e.g., *"I just checked our Slack",* *"I looked at the LinkedIn profile in another tab,"* *"I asked Sarah on the team,"* *"I scrolled the dashboard in my browser."*
+**Only ask the "anything else?" question IF** during recording the user mentioned doing something outside Claude — e.g., *"I just checked our Slack",* *"I looked at the LinkedIn profile in another tab,"* *"I asked Sarah on the team,"* *"I scrolled the dashboard in my browser."*
 
 In that case, ask:
 
-> *"Quick — anything from outside the agent (Slack, browser tabs, decisions in your head) that should be part of the skill?"*
+> *"Quick — anything from outside Claude (Slack, browser tabs, decisions in your head) that should be part of the skill?"*
 
 If they reply with prose → call **`record_demo_freetext`** with `{demoId, text}`.
 
-If they didn't mention any out-of-agent activity, **skip this step entirely** and go straight to 3c. Don't pre-ask — it adds friction with no upside since the hooks already covered the workflow.
+If they didn't mention any out-of-Claude activity, **skip this step entirely** and go straight to 3c. Don't pre-ask — it adds friction with no upside since the hooks already covered the workflow.
 
 ### Step 3c — Generate the interview questions
 
@@ -171,37 +161,27 @@ Call **`interview_for_skill`** with:
 
 You'll get back 3-8 structured questions, each typed (decision / output / signal / edge_case / general). Read them yourself first.
 
-### Step 3d — Ask the user the questions ONE AT A TIME
+### Step 3d — Ask the user the questions ONE AT A TIME (use AskUserQuestion with the supplied options)
 
-Every question from Step 3c ships with a `question.options` array of 3-4 plausible answers the user can pick from. Present them as a numbered list with this exact pattern:
+Every question from Step 3c ships with a `question.options` array of 3-4 plausible answers the user can pick from. Use the **`AskUserQuestion`** tool to render them — that way the user clicks instead of typing, and the experience is consistent across every captured skill.
 
-```
-<question text>
+For each question, call **`AskUserQuestion`** with:
+- `question`: the question's `question` field verbatim
+- `header`: a short chip label derived from `questionType` (e.g. "Output", "Edge case", "Signal", "Decision", "Context")
+- `multiSelect`: `false` (default — only `true` if the question explicitly asks for multiple selections)
+- `options`: map each item in `question.options` to `{ label: <option.label>, description: <option.description> }`. **Append " (Recommended)" to the FIRST option's label** — that's the Haiku-suggested default based on the trace.
 
-  1. <option.label> (Recommended), <option.description>
-  2. <option.label>, <option.description>
-  3. <option.label>, <option.description>
+Do NOT add an "Other" option yourself — `AskUserQuestion` always lets the user provide custom free-text input, so the escape hatch is automatic.
 
-Reply with the number (1-3) or type your own answer.
-```
-
-Mark the FIRST option as "(Recommended)", that's the Haiku-suggested default based on the trace.
-
-Parse the user's reply:
-- A single digit 1-3 maps to the labeled option
-- Free text gets treated as the user's custom answer (option 4: Other)
-
-Don't loop on invalid input. If the reply is ambiguous, accept it as free-text and proceed.
-
-**Ask one question at a time.** After each reply, call **`interview_for_skill`** with:
+**Ask one question at a time.** Wait for the answer, then call **`interview_for_skill`** with:
 - `demoId`
 - `step: "answer"`
 - `question`: the verbatim question text
-- `answer`: the option label the user picked, or their free-text response
+- `answer`: the option label the user picked, or their free-text response if they chose Other
 
 Then proceed to the next question.
 
-If the user gets impatient ("just do it", "enough", "save it"), STOP and move to finalize, better to ship with partial answers than annoy the user out of the flow.
+If the user gets impatient ("just do it", "enough", "save it"), STOP and move to finalize — better to ship with partial answers than annoy the user out of the flow.
 
 ### Step 3e — Finalize the skill
 
@@ -231,28 +211,13 @@ If status is 'draft', ask: *"Activate this org-wide so anyone can use it? Reply 
 
 ### Step 3f.5 — Offer to schedule it
 
-The finalize response includes a **`recommendedCadences`** field, 4 ranked cadences inferred from the skill's intent + tools + content, plus a "skip" hint. Render this as a numbered list and let the user pick one. This is where most users will decide whether the skill becomes a daily habit or stays ad-hoc.
+The finalize response includes a **`recommendedCadences`** field — 4 ranked cadences inferred from the skill's intent + tools + content, plus a "skip" hint. Render this as a numbered list and let the user pick one. This is where most users will decide whether the skill becomes a daily habit or stays ad-hoc.
 
-Ask:
-
-> *"want to run this on a schedule? i can wire it up now."*
-
-Then present the options from `recommendedCadences.options` as a numbered list with this pattern:
-
-```
-  1. <cadence.label> (Recommended), <cadence.description>
-  2. <cadence.label>, <cadence.description>
-  3. <cadence.label>, <cadence.description>
-  4. <cadence.label>, <cadence.description>
-  5. Skip, ad-hoc only (you can schedule it anytime with $implexa-schedule)
-
-Reply with the number (1-5) or type a custom schedule like "every 4 hours" or "daily at 6pm".
-```
-
-Parse the reply:
-- A digit 1-4 → use the corresponding cadence.label
-- `5` / "skip" / "not now" / "later" → skip
-- Free text like "every 4 hours" → use as the custom scheduleNl
+Use **`AskUserQuestion`** with:
+- `question`: *"want to run this on a schedule? i can wire it up now."*
+- `header`: `"Schedule"`
+- `multiSelect`: `false`
+- `options`: 4 entries from `recommendedCadences.options` (label = `option.label`; append `" (Recommended)"` to the FIRST option only) PLUS a final option `{ label: "Skip - ad-hoc only", description: "you can schedule it anytime with /implexa:schedule" }`. The user can also type a custom schedule like "every 4 hours" or "daily at 6pm" via the Other free-text input.
 
 Map the reply:
 
@@ -267,22 +232,26 @@ Map the reply:
    }
    ```
 
-2. On `ok: true`, the response includes `claudeScheduledTaskPrompt` and `cronExpression`. Hand off to `$implexa-schedule`'s Step 3 (the path picker: system cron / Codex app / GitHub Actions) for the user to wire up the actual trigger. Don't ask the path-picker question here, just tell them: *"manifest registered. run `$implexa-schedule <slug>` to pick a trigger path (system cron / Codex app / GitHub Actions)."* Skip to Step 3g.
+2. On `ok: true`, call **`mcp__scheduled-tasks__create_scheduled_task`** with:
+   - `prompt`: the returned `claudeScheduledTaskPrompt` (e.g. `/implexa:run-scheduled <uuid>`)
+   - `cron`: the returned `cronExpression`
+   - `timezone`: the returned `timezone`
 
 3. Confirm to the user, ≤ 2 lines:
 
    ```
    scheduled. runs <humanizedSchedule>. output lands at app.implexa.ai/runs.
-   next: pick a trigger path via $implexa-schedule.
+   manage at app.implexa.ai/scheduled.
    ```
 
-**If the user picks "Skip" (or replies "skip" / "not now" / "later"):**
+**If the user picks "Skip - ad-hoc only" (or replies "skip" / "not now" / "later"):**
 
-Tell them: *"saved. you can schedule it anytime with `$implexa-schedule <slug>`."* Move to Step 3g.
+Tell them: *"saved. you can schedule it anytime with `/implexa:schedule <slug>`."* Move to Step 3g.
 
 **Notes**:
-- Default destination is `{ type: "dashboard" }`. Do NOT ask about Slack here. The user can layer Slack on later via `$implexa-schedule`.
+- Default destination is `{ type: "dashboard" }`. Do NOT ask about Slack here. The user can layer Slack on later via `/implexa:schedule`.
 - If `schedule_skill` fails (bad parse, unknown skill, etc.), surface the error and offer to retry with a different cadence. Don't block the rest of the post-save flow.
+- If `mcp__scheduled-tasks__create_scheduled_task` is unavailable, the Implexa manifest is still saved — tell the user they can run `/implexa:run-scheduled <id>` manually.
 
 ### Step 3g — Offer to share
 
@@ -296,7 +265,7 @@ Map the reply:
 - *"not now"* / *"skip"* / *"later"* → don't call. Move on.
 - *"both"* → create one of each, render both URLs.
 
-When the call returns, render the URL prominently (full URL, with the gate description) and offer one suggested distribution channel matching the mode. Defer to `$implexa-share-this` for any follow-up share questions.
+When the call returns, render the URL prominently (full URL, with the gate description) and offer one suggested distribution channel matching the mode. Defer to `/implexa:share-this` for any follow-up share questions.
 
 ## What's next?
 
@@ -308,7 +277,7 @@ When the call returns, render the URL prominently (full URL, with the gate descr
 ## Notes for the model
 
 - **The interview is the magic.** Skip it and you produce a flat prompt. Walk through it and you produce a structured skill. Always do the interview unless the user explicitly says "skip it".
-- **The schedule prompt is bundled.** Step 3f.5 is mandatory whenever finalize returns a `recommendedCadences` field. Don't skip it. Most users don't know `$implexa-schedule` exists; surfacing the 4 cadences at the moment of save is what converts "saved a skill" → "saved a habit".
+- **The schedule prompt is bundled.** Step 3f.5 is mandatory whenever finalize returns a `recommendedCadences` field. Don't skip it. Most users don't know `/implexa:schedule` exists; surfacing the 4 cadences at the moment of save is what converts "saved a skill" → "saved a habit".
 - **Three capture surfaces — use all three.** external-data tool calls (automatic), non-Implexa actions via `record_demo_note` (manual — your job), and host-forwarded transcript (automatic via hooks). If you skip `record_demo_note` after a WebSearch, that step vanishes from the skill.
 - **`record_demo_note` is cheap.** One sentence summary, fire-and-forget, silently drops if no demo is running. Call it generously. Better to overlog than to leave a gap in the procedure.
 - **The "anything else?" question is required.** After `end_demonstration` and before `interview_for_skill`, always ask the user the free-text question. The user may skip; that's fine. But don't skip *asking*.
