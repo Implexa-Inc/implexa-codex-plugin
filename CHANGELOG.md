@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > release. Only changes to skills, the plugin manifest, or install scripts
 > warrant a version bump.
 
+## [0.27.6] - 2026-06-06
+
+Synced: loop-powered watch/until workflow triggers (run offers a loop_call;
+schedule has a watch/until branch returning a /loop invocation).
+
 ## [0.27.5] - 2026-06-06
 
 Synced from the Claude plugin: unified share (skill OR workflow), schedule-time
