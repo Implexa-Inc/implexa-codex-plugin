@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > release. Only changes to skills, the plugin manifest, or install scripts
 > warrant a version bump.
 
+## [0.27.4] - 2026-06-06
+
+Browse the workflows you've saved: synced `/implexa:my-skills workflows` lens
+(owner-scoped list_my_workflows), with one-tap run / schedule / share.
+
 ## [0.27.3] - 2026-06-06
 
 `/implexa:run` now leads with whole-job workflows (synced from the Claude
