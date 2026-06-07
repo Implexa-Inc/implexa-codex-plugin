@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > release. Only changes to skills, the plugin manifest, or install scripts
 > warrant a version bump.
 
+## [0.27.2] - 2026-06-06
+
+Capture your work as a WORKFLOW, not just a skill.
+
+### Changed
+
+- **`/implexa:record` now captures multi-step workflows.** Synced from the
+  Claude plugin: a Phase 0 skill-vs-workflow decision plus a Branch W that
+  reconstructs a multi-step job into an ordered, schedulable workflow via
+  `capture_workflow` (private, ownable, shareable for karma).
+
 ## [0.27.1] - 2026-06-06
 
 Sync the Codex plugin up to parity with the Claude plugin (0.27.1). The skill
