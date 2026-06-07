@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > release. Only changes to skills, the plugin manifest, or install scripts
 > warrant a version bump.
 
+## [0.27.3] - 2026-06-06
+
+`/implexa:run` now leads with whole-job workflows (synced from the Claude
+plugin): Step 2.4 surfaces a matching workflow_candidate (apply_workflow +
+schedule) above the skill list, and the caller's own captured/generated
+workflows resurface to re-run.
+
 ## [0.27.2] - 2026-06-06
 
 Capture your work as a WORKFLOW, not just a skill.
