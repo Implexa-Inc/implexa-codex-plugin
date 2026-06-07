@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > release. Only changes to skills, the plugin manifest, or install scripts
 > warrant a version bump.
 
+## [0.27.5] - 2026-06-06
+
+Synced from the Claude plugin: unified share (skill OR workflow), schedule-time
+config resolution for hands-free first runs, and workflow-first help/vocabulary.
+
 ## [0.27.4] - 2026-06-06
 
 Browse the workflows you've saved: synced `/implexa:my-skills workflows` lens
