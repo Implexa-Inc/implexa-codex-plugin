@@ -40,6 +40,18 @@ If `ok === false`:
 - `not found` / `not owned` → log and exit. (Should not happen in normal flow; possibly the user deleted the schedule but the cron task hasn't been canceled yet.)
 - `target skill no longer available` → log and exit. The tool already flipped the manifest to `failed`; the user will see it in /scheduled.
 
+## Step 1.5 — The permission manifest (silence must never read as success)
+
+A workflow payload now carries **`permission_manifest`** — the tools + fetch domains this agent was pre-approved for at schedule time (`/implexa:schedule` Step 2.7). You do not act on it to run; the pre-grant already wrote the allowlist. It matters for how you handle a **denied** tool.
+
+Under the scheduled-run permission scope, a tool NOT in the pre-approved allowlist is **denied and you keep going** (it does not prompt and does not hang, the old silent-stall trap). When that happens:
+
+- **Do NOT silently skip a load-bearing tool and report success.** That is a FAILURE.
+- If the deliverable cannot be produced without the blocked tool, set Step 3 `status: "failed"` with `outputMarkdown`: `Blocked on a permission not pre-approved: <tool/domain>. Re-grant by re-running /implexa:schedule for this agent.`
+- If the blocked tool was optional and the core deliverable still came out, record `status: "partial"` and note the skipped tool, never a bare "completed".
+
+The dashboard reads run state, so a `failed`/`partial` run with this reason is a visible, one-tap-fixable problem instead of an agent that looks like it never ran.
+
 ## Step 2 — Execute (branch on the payload shape)
 
 The payload from Step 1 is ONE of two shapes. Check `target_type`.
