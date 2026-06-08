@@ -126,6 +126,34 @@ If `ok === false`, the tool returns an `error` string. Common cases:
 - Unparseable schedule → echo the supported patterns from the error message
 - Invalid Slack webhook URL → ask user to paste a real `hooks.slack.com` URL
 
+The return now also carries **`permissionManifest`** — the exact tools + fetch domains this agent needs. Step 2.7 pre-grants it.
+
+## Step 2.7 — Pre-grant the permission manifest (so the unattended run never stalls)
+
+This is the reliability step that prevents the silent-stall failure: an agent runs in the user's own agent (presence not runtime), so a scheduled run inherits its interactive permission prompts. With nobody there to click "Allow fetch implexa.ai?", an un-approved tool is a dead stop with NO error, and silence reads as success. Pre-grant the manifest ONCE here so the unattended run executes under a pre-approved allowlist.
+
+`schedule_skill`'s return carries `permissionManifest` ({ `summary`, `rules`, `domains`, `requires_browser` }). `rules` are scoped allow strings (e.g. `mcp__implexa__*`, `WebSearch`, `WebFetch(domain:implexa.ai)`).
+
+1. **Ask once** (`AskUserQuestion`): "This agent **<permissionManifest.summary>**. Allow it for unattended runs? Scoped to exactly these tools, never blanket access." Options: **Allow for unattended runs** / **Not now**.
+
+2. **On "Not now":** skip, warn that the first scheduled run may stall on a prompt, continue to Step 3. Do NOT block the schedule.
+
+3. **On allow:** write the `permissionManifest` object to `/tmp/implexa-permission-manifest.json`, then run the bundled pre-grant script via the shell (structured args, never an arbitrary string). This skill registers through Claude Code's scheduled-tasks runtime (Step 3), which reads `~/.claude/settings.json`, so the script writes there:
+
+   ```bash
+   SCRIPT="${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/apply-permission-manifest.mjs}"
+   [ -f "$SCRIPT" ] || SCRIPT="$(ls "$HOME"/.codex/plugins/cache/*/implexa/*/scripts/apply-permission-manifest.mjs 2>/dev/null | tail -1)"
+   node "$SCRIPT" --file /tmp/implexa-permission-manifest.json
+   ```
+
+   The script (additive + idempotent, never a blanket bypass) merges the scoped `rules` into `~/.claude/settings.json` `permissions.allow`, and writes a scheduled-run-scoped `~/.claude/scheduled-tasks/.claude/settings.json` with `defaultMode: "dontAsk"` so an UNFORESEEN tool fails fast and visibly instead of hanging.
+
+4. **Read the JSON output.** On `ok:true`: `Pre-approved for unattended runs: <summary>`. On error, surface it but continue.
+
+5. **Codex-native caveat (honest):** if your scheduled runs execute under `codex exec` rather than Claude Code's scheduled-tasks, the Claude allowlist above does not govern them; Codex approvals live in `~/.codex/config.toml` (`approval_policy` / `sandbox_mode`). Confirm a non-interactive policy there for unattended runs rather than assuming the default. The manifest summary still tells the user exactly what to allow.
+
+6. **If `permissionManifest.requires_browser` is true:** this agent drives the browser, so it must run while the machine is on (cannot move remote). The pre-grant still applies to its local runs.
+
 ## Step 3 — Register with Claude Code's scheduled-tasks MCP
 
 Call **`mcp__scheduled-tasks__create_scheduled_task`** with:
