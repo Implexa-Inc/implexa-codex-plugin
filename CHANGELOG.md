@@ -11,6 +11,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > release. Only changes to skills, the plugin manifest, or install scripts
 > warrant a version bump.
 
+## [0.29.0] - 2026-06-08
+
+Synced from the Claude plugin: connect-your-accounts reachability.
+
+### Added
+
+- **Schedule-time reachability gate (`/implexa:schedule` Step 2.8).** Alongside the
+  permission pre-grant, a browser-driving agent's required accounts/domains are checked
+  against the backend Connections status via `get_connection_status`. If a needed account
+  is not reachable in a paired Chrome profile, the schedule WARNS and offers to connect it
+  now (steering the user to sign it into the dedicated profile and re-verifying) rather than
+  silently scheduling against an inbox it cannot reach. A recommendation, not a hard block,
+  and best-effort: a missing reachability read never stops a schedule.
+- **Runtime honest degradation + record (`/implexa:run-scheduled` Step 2.7).** When a run
+  hits a required signed-in account that is unreachable, it degrades honestly via the
+  existing fallback and records the account through `record_scheduled_run`'s new
+  `unreachableAccounts` field, which the backend fans out to the run-state row and the
+  Connections registry so the dashboard shows the gap instead of a silent partial result.
+
+## [0.28.0] - 2026-06-07
+
+Synced from the Claude plugin: unattended-run permission pre-grant.
+
+### Added
+
+- **Permission pre-grant at schedule time (`/implexa:schedule` Step 2.7).** A scheduled
+  agent's permission manifest is pre-approved once at schedule time via the bundled
+  `apply-permission-manifest.mjs`, so an unattended run executes under a scoped allowlist
+  instead of stalling on an interactive prompt. Additive, idempotent, never a blanket bypass.
+
 ## [0.27.6] - 2026-06-06
 
 Synced: loop-powered watch/until workflow triggers (run offers a loop_call;
