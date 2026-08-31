@@ -34,7 +34,7 @@ SOCKET="$(/bin/cat "$LOCATOR")" || refuse
 [ -n "$SOCKET" ] || refuse
 # Exactly one line, and only a capability path minted by Desktop for this uid.
 [ "$(/usr/bin/wc -l < "$LOCATOR" | /usr/bin/tr -d ' ')" = "0" ] || refuse
-printf '%s' "$SOCKET" | /usr/bin/grep -Eq "^/tmp/implexa-${UID_NOW}/codex-mcp/broker-[a-f0-9]{48}\\.sock$" || refuse
+printf '%s' "$SOCKET" | /usr/bin/grep -Eq "^/private/tmp/implexa-codex-mcp-[A-Za-z0-9]{6}/broker-[a-f0-9]{48}\\.sock$" || refuse
 [ -S "$SOCKET" ] || refuse
 
 exec /usr/bin/nc -U "$SOCKET"

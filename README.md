@@ -136,6 +136,7 @@ everyone in the org now has the power user's stack. power users get **Founding C
 
 - **mcp transport**: Codex talks to a short-lived, same-user Unix socket; Implexa Desktop validates the MCP method allowlist and adds authentication only when forwarding to the fixed Implexa HTTPS origin
 - **credential custody**: the account key remains in Implexa Desktop, encrypted on disk under an Implexa-owned Keychain master; Codex receives no bearer in config, environment, arguments, stdout, or stderr
+- **same-UID residual**: Unix ownership cannot distinguish Codex from another process running as the same macOS user while Desktop is open; the capability is therefore constrained, not process-authenticated, by a fresh private socket path, MCP method allowlist, fixed origin, account generation, and Desktop lifetime
 - **40+ mcp tools**: skill graph ops, external data fetching (Fiber AI, Coresignal, Apollo), outcome attribution, share/fork, scheduling
 - **skill format**: agentskills.io-compliant SKILL.md — 6-component structure
 - **outcome attribution**: last-touch within a 30-day window from CRM/ATS/calendar events

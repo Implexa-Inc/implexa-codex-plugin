@@ -82,6 +82,41 @@ for manifest in \
     '.implexa.command == $expected and (.implexa | has("args") | not) and (.implexa | has("url") | not)' "$manifest" >/dev/null
 done
 
+# Finder-like sparse execution reaches only the validated private socket path;
+# without Desktop/locator it fails closed with no stdout or secret reflection.
+if [ "$(uname -s)" = Darwin ] && [ -x /usr/bin/nc ]; then
+  FINDER_HOME="$TMP/finder-home"
+  SOCKET_ROOT="$(mktemp -d /private/tmp/implexa-codex-mcp-XXXXXX)"
+  SOCKET_PATH="$SOCKET_ROOT/broker-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.sock"
+  mkdir -p "$FINDER_HOME/.implexa"
+  node -e '
+    const net = require("net");
+    const server = net.createServer((socket) => socket.once("data", (data) => {
+      socket.end(data); server.close();
+    }));
+    server.listen(process.argv[1]);
+  ' "$SOCKET_PATH" &
+  SOCKET_SERVER_PID=$!
+  for _try in 1 2 3 4 5 6 7 8 9 10; do [ -S "$SOCKET_PATH" ] && break; sleep 0.05; done
+  printf '%s' "$SOCKET_PATH" > "$FINDER_HOME/.implexa/codex-mcp.current"
+  chmod 600 "$FINDER_HOME/.implexa/codex-mcp.current"
+  REQUEST='{"jsonrpc":"2.0","id":1,"method":"ping"}'
+  RESPONSE="$(printf '%s\n' "$REQUEST" | env -i HOME="$FINDER_HOME" PATH=/usr/bin:/bin "$ROOT/scripts/implexa-codex-mcp")"
+  wait "$SOCKET_SERVER_PID"
+  [ "$RESPONSE" = "$REQUEST" ]
+  rm -rf "$SOCKET_ROOT"
+
+  MISSING_HOME="$TMP/finder-missing-home"
+  mkdir -p "$MISSING_HOME"
+  if env -i HOME="$MISSING_HOME" PATH=/usr/bin:/bin "$ROOT/scripts/implexa-codex-mcp" >"$TMP/finder-missing-out" 2>"$TMP/finder-missing-err"; then
+    echo 'shim connected without Desktop locator' >&2
+    exit 1
+  fi
+  [ ! -s "$TMP/finder-missing-out" ]
+  grep -q 'Open Implexa' "$TMP/finder-missing-err"
+  ! grep -Fq "$SECRET" "$TMP/finder-missing-err"
+fi
+
 # Idempotence: a second Finder-like run stays secret-free and direct-command.
 env -i HOME="$HOME_FIXTURE" PATH="$PATH" IMPLEXA_PLUGIN_REPO_URL="$PLUGIN_REPO" \
   bash "$ROOT/install-for-codex.sh" >"$TMP/output-second" 2>&1
@@ -104,6 +139,56 @@ if HOME="$SYMLINK_HOME" IMPLEXA_PLUGIN_REPO_URL="$PLUGIN_REPO" bash "$ROOT/insta
   exit 1
 fi
 grep -q '^sentinel = true$' "$TMP/config-target"
+
+# Cache parent and version components are validated before any write. Neither a
+# parent symlink nor a version symlink may redirect migration into an external
+# target, and a refused setup must not print the success footer.
+for kind in parent version; do
+  LINK_HOME="$TMP/link-$kind-home"
+  EXTERNAL="$TMP/link-$kind-external"
+  mkdir -p "$LINK_HOME/.codex" "$EXTERNAL"
+  printf '%s\n' "$SECRET" > "$EXTERNAL/sentinel"
+  if [ "$kind" = parent ]; then
+    ln -s "$EXTERNAL" "$LINK_HOME/.codex/plugins"
+  else
+    mkdir -p "$LINK_HOME/.codex/plugins/cache/implexa/implexa"
+    ln -s "$EXTERNAL" "$LINK_HOME/.codex/plugins/cache/implexa/implexa/9.9.9"
+  fi
+  if HOME="$LINK_HOME" IMPLEXA_PLUGIN_REPO_URL="$PLUGIN_REPO" bash "$ROOT/install-for-codex.sh" >"$TMP/link-$kind-output" 2>&1; then
+    echo "symlinked cache $kind was accepted" >&2
+    exit 1
+  fi
+  grep -q "^$SECRET$" "$EXTERNAL/sentinel"
+  ! grep -q 'setup complete' "$TMP/link-$kind-output"
+done
+
+# An existing marketplace is scrubbed before refresh. Even when its remote is
+# unavailable, both the retained checkout and the copied cache are canonical.
+OFFLINE_HOME="$TMP/offline-home"
+mkdir -p "$OFFLINE_HOME/.codex/marketplaces"
+git clone -q "$PLUGIN_REPO" "$OFFLINE_HOME/.codex/marketplaces/implexa"
+git -C "$OFFLINE_HOME/.codex/marketplaces/implexa" remote set-url origin "$TMP/does-not-exist"
+cat > "$OFFLINE_HOME/.codex/marketplaces/implexa/.mcp.json" <<EOF
+{"implexa":{"url":"https://core.implexa.ai/api/v2/mcp?api_key=$SECRET"}}
+EOF
+HOME="$OFFLINE_HOME" bash "$ROOT/install-for-codex.sh" >"$TMP/offline-output" 2>&1
+! grep -R -Fq "$SECRET" "$OFFLINE_HOME/.codex/marketplaces/implexa/.mcp.json" \
+  "$OFFLINE_HOME/.codex/plugins/cache/implexa/implexa/1.2.3/.mcp.json"
+grep -q 'git refresh failed' "$TMP/offline-output"
+grep -q 'setup complete' "$TMP/offline-output"
+
+# A symlinked marketplace manifest is unsrubbable and therefore terminal. The
+# external target remains byte-for-byte intact and success is never claimed.
+MARKET_LINK_HOME="$TMP/market-link-home"
+mkdir -p "$MARKET_LINK_HOME/.codex/marketplaces/implexa"
+printf '%s\n' "$SECRET" > "$TMP/market-external"
+ln -s "$TMP/market-external" "$MARKET_LINK_HOME/.codex/marketplaces/implexa/.mcp.json"
+if HOME="$MARKET_LINK_HOME" bash "$ROOT/install-for-codex.sh" >"$TMP/market-link-output" 2>&1; then
+  echo 'symlinked marketplace manifest was accepted' >&2
+  exit 1
+fi
+grep -q "^$SECRET$" "$TMP/market-external"
+! grep -q 'setup complete' "$TMP/market-link-output"
 
 # An untrusted plugin version cannot turn the cache cleanup into path traversal.
 UNSAFE_REPO="$TMP/unsafe-plugin"
