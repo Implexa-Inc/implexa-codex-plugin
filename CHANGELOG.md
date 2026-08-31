@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > release. Only changes to skills, the plugin manifest, or install scripts
 > warrant a version bump.
 
+## [0.29.1] - 2026-08-31
+
+### Security
+
+- Removed the Implexa account credential from Codex MCP URLs, arguments,
+  environment variables, cached manifests, backups, and installer output.
+- Added a direct, secret-free local shim that reaches the authenticated Implexa
+  Desktop broker over a private Unix socket and fails closed when Desktop is not
+  available or signed in.
+- Added conservative migration of legacy Implexa-owned Codex configuration and
+  caches, including refusal on unsafe symlinks, traversal, or unverifiable
+  cleanup.
+
 ## [0.29.0] - 2026-06-08
 
 Synced from the Claude plugin: connect-your-accounts reachability.
