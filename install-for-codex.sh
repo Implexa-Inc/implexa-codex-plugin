@@ -7,25 +7,25 @@
 #
 # What it does (one-time setup, idempotent — safe to re-run):
 #   1. Checks that codex CLI is installed (or warns you to install it)
-#   2. Reads IMPLEXA_API_KEY from env, --api-key flag, device-auth flow,
-#      or interactive prompt (in that priority order)
-#   3. Validates the key against https://core.implexa.ai/api/v2/auth/whoami
-#   4. Writes the MCP server block to ~/.codex/config.toml (idempotent)
-#   5. Prints verification steps: codex → $implexa-get-me-started
+#   2. Installs a secret-free local MCP shim + config (idempotent)
+#   3. Scrubs legacy Implexa MCP credentials from Implexa-owned config/cache
+#   4. Prints verification steps: Codex → $implexa-help
 #
-# After this script: open a new Codex session and type $implexa-get-me-started
+# After this script: open Implexa Desktop, sign in, then start a new Codex
+# session and type $implexa-help.
 
 set -e
 
 # Add Homebrew to PATH if not already present (common on fresh Macs).
 if ! command -v brew >/dev/null 2>&1; then
-  if [ -x /opt/homebrew/bin/brew ]; then eval "$(/opt/homebrew/bin/brew shellenv)"; fi
-  if [ -x /usr/local/bin/brew ];   then eval "$(/usr/local/bin/brew shellenv)"; fi
+  if [ -x /opt/homebrew/bin/brew ]; then PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"; export PATH; fi
+  if [ -x /usr/local/bin/brew ];   then PATH="/usr/local/bin:/usr/local/sbin:$PATH"; export PATH; fi
 fi
 
 CODEX_DIR="$HOME/.codex"
 CONFIG_TOML="$CODEX_DIR/config.toml"
-API_BASE="${IMPLEXA_API_BASE_URL:-https://core.implexa.ai}"
+IMPLEXA_DIR="$HOME/.implexa"
+MCP_SHIM="$IMPLEXA_DIR/bin/implexa-codex-mcp"
 
 # Color helpers
 if [ -t 1 ]; then
@@ -40,28 +40,18 @@ warn() { printf "%s⚠%s %s\n" "$C_YELLOW" "$C_RESET" "$*"; }
 err()  { printf "%s✗%s %s\n" "$C_RED"    "$C_RESET" "$*" >&2; }
 info() { printf "%s→%s %s\n" "$C_BLUE"   "$C_RESET" "$*"; }
 
-# Helper: open URL in the user's default browser (best-effort).
-open_browser() {
-  local url="$1"
-  if   command -v open     >/dev/null 2>&1; then open     "$url" >/dev/null 2>&1 &
-  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$url" >/dev/null 2>&1 &
-  elif command -v wslview  >/dev/null 2>&1; then wslview  "$url" >/dev/null 2>&1 &
-  fi
-}
-
 echo ""
 echo "${C_BOLD}Implexa Codex plugin installer${C_RESET}"
 echo ""
 
-# ─── Parse --api-key flag ────────────────────────────────────────────────
-FLAG_API_KEY=""
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --api-key)  FLAG_API_KEY="${2:-}"; shift 2 ;;
-    --api-key=*) FLAG_API_KEY="${1#*=}"; shift ;;
-    *) shift ;;
+# Account credentials belong exclusively to the Implexa Desktop app. Refuse
+# legacy secret-bearing installer flags without ever echoing their values.
+for arg in "$@"; do
+  case "$arg" in
+    --api-key|--api-key=*) err "API-key installer flags are no longer accepted. Sign in through Implexa Desktop."; exit 2 ;;
   esac
 done
+unset IMPLEXA_API_KEY IMPLEXA_INSTALL_TOKEN
 
 # ─── 1. Check codex CLI ──────────────────────────────────────────────────
 if ! command -v codex >/dev/null 2>&1; then
@@ -94,220 +84,108 @@ else
   ok "jq found at $(command -v jq)"
 fi
 
-# ─── 3. Get the API key ──────────────────────────────────────────────────
-# Priority: --api-key flag > IMPLEXA_API_KEY env > IMPLEXA_INSTALL_TOKEN
-# > device-auth flow (browser) > interactive prompt (last resort)
+# ─── 3. Authentication custody ───────────────────────────────────────────
+# Codex receives only a local, revocable capability. Implexa Desktop holds and
+# injects the account credential after binding each connection to the active account.
+# The helper therefore fails closed while Desktop is absent or signed out.
 
-API_KEY="${FLAG_API_KEY:-${IMPLEXA_API_KEY:-}}"
-
-# -- Path 1: Install token (pre-baked from dashboard /install) -----------
-if [ -z "$API_KEY" ] && [ -n "${IMPLEXA_INSTALL_TOKEN:-}" ]; then
-  info "Redeeming install token..."
-  REDEEM_RESPONSE=$(curl -sS -X POST "$API_BASE/api/v2/install-tokens/$IMPLEXA_INSTALL_TOKEN/redeem" \
-    -H "Content-Type: application/json" 2>&1 || echo '{"error":"network error"}')
-  API_KEY=$(echo "$REDEEM_RESPONSE" | jq -r '.apiKey // empty' 2>/dev/null)
-  REDEEM_ERROR=$(echo "$REDEEM_RESPONSE" | jq -r '.error // empty' 2>/dev/null)
-  if [ -z "$API_KEY" ]; then
-    err "Failed to redeem install token: ${REDEEM_ERROR:-unknown error}"
-    err "Tokens expire after 10 min and are single-use."
-    err "Get a fresh install command at https://app.implexa.ai/install"
-    exit 1
-  fi
-  ok "Token redeemed — got a fresh API key (${API_KEY:0:13}...)"
-fi
-
-# -- Path 2: Device-auth flow (browser login from terminal) --------------
-# Used when the user runs: curl -fsSL https://core.implexa.ai/install-for-codex.sh | bash
-# CRITICAL: always read from /dev/tty, never from stdin (stdin IS the script when piped from curl).
-if [ -z "$API_KEY" ] && [ -r /dev/tty ]; then
-  echo ""
-  info "Starting browser login..."
-  START_RESPONSE=$(curl -sS -X POST "$API_BASE/api/v2/cli-auth/start" \
-    -H "Content-Type: application/json" -d '{}' 2>&1 || echo '{"error":"network error"}')
-  DEVICE_CODE=$(echo "$START_RESPONSE"       | jq -r '.deviceCode // empty'       2>/dev/null)
-  VERIFICATION_CODE=$(echo "$START_RESPONSE" | jq -r '.verificationCode // empty' 2>/dev/null)
-  VERIFICATION_URL=$(echo "$START_RESPONSE"  | jq -r '.verificationUrl // empty'  2>/dev/null)
-  POLL_INTERVAL=$(echo "$START_RESPONSE"     | jq -r '.interval // 2'             2>/dev/null)
-  EXPIRES_IN=$(echo "$START_RESPONSE"        | jq -r '.expiresIn // 600'          2>/dev/null)
-
-  if [ -z "$DEVICE_CODE" ] || [ -z "$VERIFICATION_URL" ]; then
-    err "Failed to start browser login (could not reach $API_BASE)."
-    warn "Falling back to manual API-key prompt."
-  else
-    echo ""
-    echo "${C_BOLD}Open this URL in your browser to log in:${C_RESET}"
-    echo ""
-    echo "    ${C_BLUE}$VERIFICATION_URL${C_RESET}"
-    echo ""
-    echo "${C_BOLD}Verification code:${C_RESET}  ${C_GREEN}$VERIFICATION_CODE${C_RESET}"
-    echo "    Make sure the browser shows the same code before approving."
-    echo ""
-
-    open_browser "$VERIFICATION_URL"
-    info "Tried to open your browser automatically. If nothing happened, copy the URL above."
-
-    MAX_POLLS=$(( (EXPIRES_IN / POLL_INTERVAL) + 5 ))
-    POLL_COUNT=0
-    AUTH_EMAIL=""
-    echo -n "→ Waiting for approval (press Ctrl+C to cancel) "
-    while [ $POLL_COUNT -lt $MAX_POLLS ]; do
-      sleep "$POLL_INTERVAL"
-      POLL_RESPONSE=$(curl -sS -X POST "$API_BASE/api/v2/cli-auth/poll" \
-        -H "Content-Type: application/json" \
-        -d "{\"deviceCode\":\"$DEVICE_CODE\"}" 2>&1 || echo '{"status":"network-error"}')
-      POLL_STATUS=$(echo "$POLL_RESPONSE" | jq -r '.status // empty' 2>/dev/null)
-
-      case "$POLL_STATUS" in
-        approved)
-          API_KEY=$(echo "$POLL_RESPONSE"    | jq -r '.apiKey // empty' 2>/dev/null)
-          AUTH_EMAIL=$(echo "$POLL_RESPONSE" | jq -r '.email // empty'  2>/dev/null)
-          if [ -n "$API_KEY" ]; then
-            echo ""
-            ok "Logged in as ${C_BOLD}$AUTH_EMAIL${C_RESET}"
-          fi
-          break
-          ;;
-        denied)
-          echo ""; err "Login denied. Run the install command again if that wasn't intentional."
-          exit 1 ;;
-        expired)
-          echo ""; err "Login session expired. Run the install command again."
-          exit 1 ;;
-        consumed)
-          echo ""; err "Login session already used. Run the install command again."
-          exit 1 ;;
-        pending|"")
-          if [ $(( POLL_COUNT % 5 )) -eq 0 ]; then printf "."; fi ;;
-        *)
-          if [ $(( POLL_COUNT % 5 )) -eq 0 ]; then printf "?"; fi ;;
-      esac
-      POLL_COUNT=$(( POLL_COUNT + 1 ))
-    done
-
-    if [ -z "$API_KEY" ]; then
-      echo ""; err "Timed out waiting for browser approval. Run the install command again."
-      exit 1
-    fi
-
-    echo ""
-    echo "${C_BOLD}Press Enter to install, or Ctrl+C to cancel.${C_RESET}"
-    read -r _confirm < /dev/tty || true
-  fi
-fi
-
-# -- Path 3: Interactive prompt (last resort) ----------------------------
-if [ -z "$API_KEY" ]; then
-  if [ ! -r /dev/tty ]; then
-    err "No API key provided and no terminal available to prompt."
-    err "Set IMPLEXA_API_KEY first, or download + run the script directly:"
-    echo "    curl -O https://raw.githubusercontent.com/Implexa-Inc/implexa-codex-plugin/main/install-for-codex.sh"
-    echo "    bash install-for-codex.sh"
-    exit 1
-  fi
-  echo ""
-  echo "${C_BOLD}Enter your Implexa API key (imp_live_...):${C_RESET}"
-  echo "Get one at https://app.implexa.ai/install"
-  echo -n "API key: "
-  read -r API_KEY < /dev/tty
-  echo ""
-  if [ -z "$API_KEY" ]; then
-    err "No API key provided. Aborting."; exit 1
-  fi
-fi
-
-# -- Sanity check key prefix --------------------------------------------
-case "$API_KEY" in
-  imp_*) ok "API key looks valid (starts with imp_)" ;;
-  *)     warn "API key doesn't start with 'imp_' — proceeding anyway, but double-check it's correct" ;;
-esac
-
-# ─── 4. Validate the key ─────────────────────────────────────────────────
-# Capture http status separately so we can surface meaningful errors instead
-# of silently exiting on a 401/403/timeout. The previous version trusted
-# `err` to print to stderr, but in the curl|bash pipe context some terminals
-# buffer stderr separately and the user sees nothing before the script exits.
-# Writing everything to stdout (with explicit flushes) is more reliable.
-info "Validating API key against $API_BASE/api/v2/auth/whoami..."
-
-WHOAMI_TMP=$(mktemp -t implexa-whoami.XXXXXX) || WHOAMI_TMP="/tmp/implexa-whoami.$$"
-WHOAMI_HTTP=$(curl -sS -w '%{http_code}' -o "$WHOAMI_TMP" \
-  --connect-timeout 10 --max-time 15 \
-  "$API_BASE/api/v2/auth/whoami" \
-  -H "Authorization: Bearer $API_KEY" 2>"$WHOAMI_TMP.err" || echo 'curl-failed')
-WHOAMI_RESPONSE=$(cat "$WHOAMI_TMP" 2>/dev/null || true)
-WHOAMI_CURL_ERR=$(cat "$WHOAMI_TMP.err" 2>/dev/null || true)
-rm -f "$WHOAMI_TMP" "$WHOAMI_TMP.err"
-
-WHOAMI_EMAIL=$(echo "$WHOAMI_RESPONSE" | jq -r '.email // .user.email // empty' 2>/dev/null)
-WHOAMI_ERROR=$(echo "$WHOAMI_RESPONSE" | jq -r '.error // empty' 2>/dev/null)
-
-if [ -z "$WHOAMI_EMAIL" ]; then
-  # Print to stdout (not stderr) so curl|bash users always see it.
-  echo ""
-  echo "${C_RED}✗${C_RESET} API key validation failed."
-  echo "  HTTP status: ${WHOAMI_HTTP:-(no response)}"
-  [ -n "$WHOAMI_ERROR" ] && echo "  Error: $WHOAMI_ERROR"
-  [ -n "$WHOAMI_CURL_ERR" ] && echo "  curl: $WHOAMI_CURL_ERR"
-  echo ""
-  case "$WHOAMI_HTTP" in
-    401|403)
-      echo "Your API key is rejected by the server. It may be revoked, expired,"
-      echo "or never existed. Common cause: a stale IMPLEXA_API_KEY env var from"
-      echo "an earlier install attempt. Fix:"
-      echo ""
-      echo "    unset IMPLEXA_API_KEY"
-      echo "    curl -fsSL https://core.implexa.ai/install-for-codex.sh | bash"
-      echo ""
-      echo "Or grab a fresh key at https://app.implexa.ai/settings/api-keys"
-      ;;
-    000|curl-failed|"")
-      echo "Couldn't reach $API_BASE. Check your network, then retry."
-      ;;
-    *)
-      echo "Unexpected response from $API_BASE."
-      [ -n "$WHOAMI_RESPONSE" ] && echo "Body: $WHOAMI_RESPONSE"
-      echo "Get a fresh key at https://app.implexa.ai/settings/api-keys"
-      ;;
-  esac
-  exit 1
-fi
-ok "Validated. Connected as $WHOAMI_EMAIL"
-
-# ─── 5. Ensure ~/.codex dir exists ───────────────────────────────────────
+# ─── 4. Ensure ~/.codex dir exists ──────────────────────────────────────
 if [ ! -d "$CODEX_DIR" ]; then
   mkdir -p "$CODEX_DIR"
   ok "Created Codex config directory at $CODEX_DIR"
 else
   ok "Codex config directory found at $CODEX_DIR"
 fi
+[ ! -L "$CONFIG_TOML" ] || { err "Refusing to replace a symlinked Codex config"; exit 1; }
 
-# ─── 6. Write MCP server config to ~/.codex/config.toml (idempotent) ────
+# ─── 5. Install secret-free MCP shim + config (idempotent) ──────────────
 #
-# Auth-via-query-param. Codex's rmcp streamable_http client does NOT honor
-# the `headers = { Authorization = ... }` field in config.toml (verified
-# 2026-05-27: codex sends every request WITHOUT the Authorization header
-# even when headers is set, then surfaces a 401 from the upstream server
-# as the actual error). It also rejects `bearer_token` for streamable_http
-# transports. The only auth pattern that works reliably is embedding the
-# API key in the URL as a query parameter.
-#
-# Our backend's verifyApiKey middleware accepts `?api_key=imp_live_...` as
-# a first-class authentication method (set up specifically for clients
-# that can't customize headers).
-#
-# Trade-off: the key appears in URL form, which means it's visible in any
-# request log that captures URLs. Same security profile as the key being
-# in ~/.codex/config.toml at all — both are local-file secrets.
-#
-# Strategy:
-#   - If config.toml doesn't exist → create with canonical block.
-#   - If it exists with ANY [mcp_servers.implexa] block (any format) →
-#     backup, strip cleanly, append fresh.
-#   - Never touch [mcp_servers.*] blocks for other servers.
+# Finder-launched Codex has no safe shell environment for an account bearer
+# token. The Implexa Desktop app owns that credential and exposes a revocable,
+# per-app-life Unix-socket capability. Codex receives only this fixed shim path.
+# No account key is written to config, plugin cache, argv, env or logs.
 
-MCP_URL="https://core.implexa.ai/api/v2/mcp?api_key=$API_KEY"
+mkdir -p "$IMPLEXA_DIR/bin"
+chmod 700 "$IMPLEXA_DIR" "$IMPLEXA_DIR/bin" 2>/dev/null || true
+MCP_SHIM_TMP="$MCP_SHIM.tmp.$$"
+cat > "$MCP_SHIM_TMP" <<'IMPLEXA_CODEX_MCP_SHIM'
+#!/bin/sh
+# Secret-free Codex MCP transport.  The Implexa Desktop app owns the account
+# credential and publishes only a short-lived Unix-socket capability.  This
+# shim carries JSON-RPC bytes; it never reads, receives or expands an API key.
+# Unix ownership cannot distinguish Codex from another process running under
+# the same macOS uid. That explicit residual is constrained by Desktop's method
+# allowlist, fixed upstream origin, account generation and app lifetime.
+set -eu
+
+LOCATOR="$HOME/.implexa/codex-mcp.current"
+UID_NOW="$(/usr/bin/id -u)"
+
+refuse() {
+  echo "Implexa MCP is unavailable. Open Implexa, sign in, then retry." >&2
+  exit 1
+}
+
+[ -f "$LOCATOR" ] || refuse
+
+# The locator is capability material.  Refuse symlinks, foreign ownership and
+# loose modes before reading it. BSD stat is the production path; GNU stat keeps
+# the same script testable on non-macOS CI.
+[ ! -L "$LOCATOR" ] || refuse
+if STAT_LINE="$(/usr/bin/stat -f '%u %Lp' "$LOCATOR" 2>/dev/null)"; then
+  :
+elif STAT_LINE="$(/usr/bin/stat -c '%u %a' "$LOCATOR" 2>/dev/null)"; then
+  :
+else
+  refuse
+fi
+[ "$STAT_LINE" = "$UID_NOW 600" ] || refuse
+
+SOCKET="$(/bin/cat "$LOCATOR")" || refuse
+[ -n "$SOCKET" ] || refuse
+# Exactly one line, and only a capability path minted by Desktop for this uid.
+[ "$(/usr/bin/wc -l < "$LOCATOR" | /usr/bin/tr -d ' ')" = "0" ] || refuse
+printf '%s' "$SOCKET" | /usr/bin/grep -Eq "^/tmp/implexa-${UID_NOW}/codex-mcp/broker-[a-f0-9]{48}\\.sock$" || refuse
+[ -S "$SOCKET" ] || refuse
+
+exec /usr/bin/nc -U "$SOCKET"
+IMPLEXA_CODEX_MCP_SHIM
+chmod 700 "$MCP_SHIM_TMP"
+mv "$MCP_SHIM_TMP" "$MCP_SHIM"
+ok "Installed secret-free Codex MCP shim"
+
+MCP_COMMAND_TOML=$(jq -Rn --arg value "$MCP_SHIM" '$value')
 MCP_BLOCK="[mcp_servers.implexa]
-url = \"$MCP_URL\""
+command = $MCP_COMMAND_TOML"
+
+strip_implexa_block() {
+  local input="$1"
+  local output="$2"
+  awk '
+    /^\[mcp_servers\.implexa\]/ { skip=1; next }
+    /^\[/ && skip { skip=0 }
+    !skip { print }
+  ' "$input" > "$output"
+}
+
+contains_installed_account_secret() {
+  # Match only credential-bearing forms from legacy Implexa installers. Never
+  # print a matching line: it may itself contain the retired account key.
+  LC_ALL=C grep -Eiq "api_key[[:space:]]*=[[:space:]]*['\"]?imp_|api_key=imp_|bearer_token[[:space:]]*=[[:space:]]*['\"]?imp_|authorization[^[:cntrl:]]*(bearer[[:space:]]+)?imp_|x-api-key[^[:cntrl:]]*imp_" "$1"
+}
+
+prove_secret_free() {
+  local candidate="$1"
+  [ -e "$candidate" ] || return 0
+  [ -f "$candidate" ] && [ ! -L "$candidate" ] || {
+    err "Cannot prove an Implexa-owned Codex config is secret-free; refusing to continue."
+    exit 1
+  }
+  if contains_installed_account_secret "$candidate"; then
+    err "A legacy Implexa credential remains in Codex configuration; refusing to continue."
+    exit 1
+  fi
+}
 
 if [ ! -f "$CONFIG_TOML" ]; then
   # Fresh file — just write the block.
@@ -319,23 +197,18 @@ else
   # handles both the legacy `bearer_token` format and the canonical
   # `headers` format equally well.
   if grep -q '^\[mcp_servers\.implexa\]' "$CONFIG_TOML" 2>/dev/null; then
-    BACKUP="$CONFIG_TOML.implexa-backup-$(date +%s)"
-    cp "$CONFIG_TOML" "$BACKUP"
+    BACKUP="$CONFIG_TOML.implexa-backup-$(date +%s)-$$"
 
-    # Strip the existing implexa block: start skipping at the section
-    # header, stop skipping when we hit the NEXT [section] header.
-    # Trailing blank lines from the stripped block are tolerated; toml
-    # parsers ignore them.
-    awk '
-      /^\[mcp_servers\.implexa\]/ { skip=1; next }
-      /^\[/ && skip { skip=0 }
-      !skip { print }
-    ' "$CONFIG_TOML" > "$CONFIG_TOML.tmp.$$"
+    # The backup is deliberately sanitized too. A byte-for-byte backup would
+    # preserve the very query/header credential this migration removes.
+    strip_implexa_block "$CONFIG_TOML" "$BACKUP"
+    chmod 600 "$BACKUP" 2>/dev/null || true
+    strip_implexa_block "$CONFIG_TOML" "$CONFIG_TOML.tmp.$$"
 
     # Append fresh canonical block.
     printf '\n%s\n' "$MCP_BLOCK" >> "$CONFIG_TOML.tmp.$$"
     mv "$CONFIG_TOML.tmp.$$" "$CONFIG_TOML"
-    ok "Migrated [mcp_servers.implexa] to canonical headers format (backup: $BACKUP)"
+    ok "Migrated [mcp_servers.implexa] to the local Desktop broker (sanitized backup: $BACKUP)"
   else
     # No existing block — append it.
     echo "" >> "$CONFIG_TOML"
@@ -343,8 +216,46 @@ else
     ok "Appended [mcp_servers.implexa] block to $CONFIG_TOML"
   fi
 fi
+chmod 600 "$CONFIG_TOML" 2>/dev/null || true
 
-# ─── 7. Install plugin skills into Codex's plugin cache ──────────────────
+# Scrub every older installer backup we own. Remove only the Implexa MCP block;
+# all unrelated Codex settings and MCP servers survive byte-for-byte through awk.
+for LEGACY_BACKUP in "$CODEX_DIR"/config.toml.implexa-backup-*; do
+  [ -e "$LEGACY_BACKUP" ] || continue
+  [ -f "$LEGACY_BACKUP" ] && [ ! -L "$LEGACY_BACKUP" ] || {
+    err "An Implexa-owned Codex backup is not a safe regular file; refusing to continue."
+    exit 1
+  }
+  LEGACY_TMP="$LEGACY_BACKUP.tmp.$$"
+  strip_implexa_block "$LEGACY_BACKUP" "$LEGACY_TMP"
+  mv "$LEGACY_TMP" "$LEGACY_BACKUP"
+  chmod 600 "$LEGACY_BACKUP" 2>/dev/null || true
+done
+# Interrupted legacy installs can leave a secret-bearing temporary config even
+# when config.toml itself was migrated. These names are owned by this installer;
+# scrub only the Implexa block and preserve every unrelated section.
+for LEGACY_CONFIG_TMP in "$CODEX_DIR"/config.toml.tmp.*; do
+  [ -e "$LEGACY_CONFIG_TMP" ] || continue
+  [ -f "$LEGACY_CONFIG_TMP" ] && [ ! -L "$LEGACY_CONFIG_TMP" ] || {
+    err "An Implexa-owned Codex temporary config is not a safe regular file; refusing to continue."
+    exit 1
+  }
+  SCRUBBED_CONFIG_TMP="$LEGACY_CONFIG_TMP.scrubbed.$$"
+  strip_implexa_block "$LEGACY_CONFIG_TMP" "$SCRUBBED_CONFIG_TMP"
+  mv "$SCRUBBED_CONFIG_TMP" "$LEGACY_CONFIG_TMP"
+  chmod 600 "$LEGACY_CONFIG_TMP" 2>/dev/null || true
+done
+prove_secret_free "$CONFIG_TOML"
+for LEGACY_BACKUP in "$CODEX_DIR"/config.toml.implexa-backup-*; do
+  [ -e "$LEGACY_BACKUP" ] || continue
+  prove_secret_free "$LEGACY_BACKUP"
+done
+for LEGACY_CONFIG_TMP in "$CODEX_DIR"/config.toml.tmp.*; do
+  [ -e "$LEGACY_CONFIG_TMP" ] || continue
+  prove_secret_free "$LEGACY_CONFIG_TMP"
+done
+
+# ─── 6. Install plugin skills into Codex's plugin cache ──────────────────
 #
 # Codex's MCP config (the block we wrote above) only exposes the MCP
 # *tools* to the model. It does NOT install the SKILL.md files that
@@ -354,8 +265,9 @@ fi
 #   ~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/skills/
 #
 # Mimics what `codex plugin install` does internally — clone the repo
-# into a marketplace dir, copy to the versioned cache, substitute the
-# resolved API key into the cached .mcp.json. Failure here is
+# into a marketplace dir and copy to the versioned cache. The .mcp.json is
+# permanently secret-free: it invokes the same local Desktop broker shim.
+# Failure here is
 # NON-FATAL: the MCP tools still work, the user just won't see
 # $implexa-* slash commands. We log a clear warning + a manual command
 # they can run.
@@ -364,8 +276,32 @@ fi
 # sessions, reopen) to pick up newly-installed plugins.
 
 MARKETPLACE_DIR="$CODEX_DIR/marketplaces/implexa"
-PLUGIN_REPO_URL="https://github.com/Implexa-Inc/implexa-codex-plugin.git"
+PLUGIN_REPO_URL="${IMPLEXA_PLUGIN_REPO_URL:-https://github.com/Implexa-Inc/implexa-codex-plugin.git}"
 PLUGIN_CACHE_BASE="$CODEX_DIR/plugins/cache/implexa/implexa"
+
+write_secret_free_mcp_json() {
+  local output="$1"
+  jq -n --arg command "$MCP_SHIM" '{implexa: {command: $command}}' > "$output"
+  chmod 600 "$output" 2>/dev/null || true
+}
+
+# Old versioned caches remain after upgrades. Rewrite only Implexa-owned MCP
+# manifests, never another marketplace/plugin, so a stale version cannot keep
+# leaking a retired query/header credential through `codex mcp list/get`.
+for LEGACY_MCP in "$PLUGIN_CACHE_BASE"/*/.mcp.json "$PLUGIN_CACHE_BASE"/*/.mcp.json.tmp*; do
+  [ -e "$LEGACY_MCP" ] || continue
+  [ -f "$LEGACY_MCP" ] && [ ! -L "$LEGACY_MCP" ] || {
+    err "An Implexa-owned cached MCP manifest is not a safe regular file; refusing to continue."
+    exit 1
+  }
+  LEGACY_MCP_TMP="$LEGACY_MCP.tmp.$$"
+  write_secret_free_mcp_json "$LEGACY_MCP_TMP"
+  mv "$LEGACY_MCP_TMP" "$LEGACY_MCP"
+done
+for LEGACY_MCP in "$PLUGIN_CACHE_BASE"/*/.mcp.json "$PLUGIN_CACHE_BASE"/*/.mcp.json.tmp*; do
+  [ -e "$LEGACY_MCP" ] || continue
+  prove_secret_free "$LEGACY_MCP"
+done
 
 print_skill_fallback() {
   warn "Couldn't auto-install the Implexa skill files into Codex's plugin cache."
@@ -403,6 +339,10 @@ install_skill_files() {
   fi
   local plugin_version
   plugin_version=$(jq -r '.version // "0.11.0"' "$plugin_json")
+  printf '%s' "$plugin_version" | LC_ALL=C grep -Eq '^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$' || {
+    err "plugin.json contains an unsafe version"
+    return 1
+  }
   local cache_dir="$PLUGIN_CACHE_BASE/$plugin_version"
 
   # 3. Copy into the versioned cache. Strip .git to keep the cache lean.
@@ -414,20 +354,15 @@ install_skill_files() {
   fi
   rm -rf "$cache_dir/.git"
 
-  # 4. Substitute the resolved API key into the cached .mcp.json. The
-  # upstream .mcp.json has `${IMPLEXA_API_KEY}` as a placeholder; codex
-  # does NOT do env-var substitution in plugin .mcp.json files, so we
-  # write the real key. (Same security profile as the
-  # [mcp_servers.implexa] block in config.toml — key on disk in
-  # plaintext under ~/.codex/. chmod 600 below.)
+  # 4. Defense in depth: canonicalize the cache manifest even if a stale
+  # marketplace checkout was reused. Never substitute or persist an API key.
   if [ -f "$cache_dir/.mcp.json" ]; then
-    # Use a portable sed pattern that works on both BSD (macOS) and GNU sed.
-    # Escape the API key for sed: the only meta we care about is '/'.
-    local escaped_key
-    escaped_key=$(printf '%s' "$API_KEY" | sed 's:/:\\/:g')
-    sed "s/\${IMPLEXA_API_KEY}/$escaped_key/g" "$cache_dir/.mcp.json" > "$cache_dir/.mcp.json.tmp" \
-      && mv "$cache_dir/.mcp.json.tmp" "$cache_dir/.mcp.json"
-    chmod 600 "$cache_dir/.mcp.json" 2>/dev/null || true
+    write_secret_free_mcp_json "$cache_dir/.mcp.json"
+    prove_secret_free "$cache_dir/.mcp.json"
+  fi
+  if [ -f "$MARKETPLACE_DIR/.mcp.json" ] && [ ! -L "$MARKETPLACE_DIR/.mcp.json" ]; then
+    write_secret_free_mcp_json "$MARKETPLACE_DIR/.mcp.json"
+    prove_secret_free "$MARKETPLACE_DIR/.mcp.json"
   fi
 
   ok "Installed $plugin_version skill files at $cache_dir"
@@ -439,7 +374,7 @@ if ! install_skill_files; then
   print_skill_fallback
 fi
 
-# ─── 7b. Register the plugin in config.toml ─────────────────────────────
+# ─── 6b. Register the plugin in config.toml ─────────────────────────────
 #
 # Cached skill files alone don't make $implexa-* commands surface. Codex
 # only loads plugins that are explicitly registered via two TOML blocks:
@@ -492,18 +427,20 @@ register_plugin_in_config() {
 
 register_plugin_in_config || warn "couldn't register plugin in config.toml — \$implexa-* commands won't surface until you add the blocks manually"
 
-# ─── 8. Done ─────────────────────────────────────────────────────────────
+# ─── 7. Done ─────────────────────────────────────────────────────────────
 echo ""
 echo "${C_BOLD}${C_GREEN}setup complete.${C_RESET}"
 echo ""
 echo "${C_BOLD}verify it works:${C_RESET}"
-echo "  1. fully quit Codex (close all sessions + the desktop app)"
-echo "  2. relaunch: ${C_BOLD}codex${C_RESET}"
-echo "  3. type: ${C_BOLD}\$implexa-help${C_RESET}"
-echo "  4. you should see: 7 commands + your credit balance"
+echo "  1. open Implexa Desktop and sign in"
+echo "  2. keep Implexa open; fully quit Codex (close all sessions + the desktop app)"
+echo "  3. relaunch Codex"
+echo "  4. type: ${C_BOLD}\$implexa-help${C_RESET}"
+echo "  5. you should see: 7 commands + your credit balance"
 echo ""
 echo "${C_BOLD}what's installed:${C_RESET}"
-echo "  - MCP server: https://core.implexa.ai/api/v2/mcp (Streamable HTTP)"
+echo "  - MCP transport: revocable local Implexa Desktop broker"
+echo "  - Your account key stays in Implexa Desktop and is never installed into Codex"
 echo "  - 7 visible commands: suggest, run, record, my-skills, schedule, share-this, help"
 echo "    (plus run-scheduled internally for the scheduler callback)"
 echo "  - everything else (fork, morning brief, skill-roi, clawhub publish) is one natural-language ask away"
