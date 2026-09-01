@@ -1,5 +1,5 @@
 {
   "implexa": {
-    "url": "https://core.implexa.ai/api/v2/mcp?api_key=${IMPLEXA_API_KEY}"
+    "command": "${HOME}/.implexa/bin/implexa-codex-mcp"
   }
 }

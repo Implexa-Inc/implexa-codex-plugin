@@ -10,7 +10,7 @@
 curl -fsSL https://core.implexa.ai/install-for-codex.sh | bash
 ```
 
-one paste. ~30 seconds. browser opens for sign-up/sign-in, you approve, terminal wires everything else. installs the api key and mcp config — done.
+one paste wires a secret-free local MCP transport. Open Implexa Desktop and sign in there; your account key stays encrypted under the Desktop app's Keychain custody and is never installed into Codex.
 
 free forever. no credit card. MIT-licensed plugin, hosted service.
 
@@ -33,17 +33,14 @@ free forever. no credit card. MIT-licensed plugin, hosted service.
 
 ### 1. install
 
-**marketplace (recommended):**
-```bash
-npx codex-marketplace add Implexa-Inc/implexa-codex-plugin --plugin
-```
-
-**one-line script:**
+**one-line script (recommended):**
 ```bash
 curl -fsSL https://core.implexa.ai/install-for-codex.sh | bash
 ```
 
-works on macOS, Linux, and Windows (WSL). browser opens to approve the install. once you click Approve, the terminal finishes installing the api key and mcp wiring.
+On macOS, this installs the plugin skills and a direct, secret-free MCP shim. Open Implexa Desktop, sign in, and keep it running while Codex uses Implexa. The installer never accepts, prints, or persists your account key.
+
+Installing the marketplace package alone installs the skill files but not the Desktop broker shim; run the script above to complete the local transport setup.
 
 ### 2. verify
 
@@ -137,7 +134,9 @@ everyone in the org now has the power user's stack. power users get **Founding C
 
 ## under the hood
 
-- **mcp transport**: streamable HTTP (same backend as the Claude Code plugin — `https://core.implexa.ai/api/v2/mcp`)
+- **mcp transport**: Codex talks to a short-lived, same-user Unix socket; Implexa Desktop validates the MCP method allowlist and adds authentication only when forwarding to the fixed Implexa HTTPS origin
+- **credential custody**: the account key remains in Implexa Desktop, encrypted on disk under an Implexa-owned Keychain master; Codex receives no bearer in config, environment, arguments, stdout, or stderr
+- **same-UID residual**: Unix ownership cannot distinguish Codex from another process running as the same macOS user while Desktop is open; the capability is therefore constrained, not process-authenticated, by a fresh private socket path, MCP method allowlist, fixed origin, account generation, and Desktop lifetime
 - **40+ mcp tools**: skill graph ops, external data fetching (Fiber AI, Coresignal, Apollo), outcome attribution, share/fork, scheduling
 - **skill format**: agentskills.io-compliant SKILL.md — 6-component structure
 - **outcome attribution**: last-touch within a 30-day window from CRM/ATS/calendar events
@@ -155,7 +154,7 @@ everyone in the org now has the power user's stack. power users get **Founding C
 
 ## uninstall
 
-remove the `[mcp_servers.implexa]` block from `~/.codex/config.toml`. your skills stay in the dashboard at app.implexa.ai. to revoke the api key, go to [connected installs](https://app.implexa.ai/settings/api-keys).
+remove the `[mcp_servers.implexa]` block from `~/.codex/config.toml`, then remove `~/.implexa/bin/implexa-codex-mcp` if no other local install uses it. Sign out in Implexa Desktop to revoke the live local broker immediately. your skills stay in the dashboard at app.implexa.ai.
 
 ---
 
