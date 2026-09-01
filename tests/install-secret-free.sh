@@ -37,6 +37,8 @@ cat > "$HOME_FIXTURE/.codex/config.toml.implexa-backup-old" <<EOF
 keep = "backup"
 [mcp_servers.implexa]
 headers = { Authorization = "Bearer $SECRET" }
+[mcp_servers.implexa.http_headers]
+X-Api-Key = "$SECRET"
 EOF
 cat > "$HOME_FIXTURE/.codex/config.toml.tmp.legacy" <<EOF
 [other]
@@ -65,6 +67,7 @@ fi
 grep -q '^\[mcp_servers.other\]' "$HOME_FIXTURE/.codex/config.toml"
 grep -q '^\[features\]' "$HOME_FIXTURE/.codex/config.toml"
 grep -q 'keep = "backup"' "$HOME_FIXTURE/.codex/config.toml.implexa-backup-old"
+! grep -q '^\[mcp_servers\.implexa' "$HOME_FIXTURE/.codex/config.toml.implexa-backup-old"
 grep -q 'keep = "temporary"' "$HOME_FIXTURE/.codex/config.toml.tmp.legacy"
 grep -q '^command = ' "$HOME_FIXTURE/.codex/config.toml"
 if grep -Eq '^args[[:space:]]*=|/bin/(ba)?sh' "$HOME_FIXTURE/.codex/config.toml"; then
@@ -72,6 +75,19 @@ if grep -Eq '^args[[:space:]]*=|/bin/(ba)?sh' "$HOME_FIXTURE/.codex/config.toml"
   exit 1
 fi
 cmp "$ROOT/scripts/implexa-codex-mcp" "$HOME_FIXTURE/.implexa/bin/implexa-codex-mcp"
+
+# Parse the generated TOML through the real Codex CLI when it is available.
+# This catches a syntactically valid-looking file that Codex would ignore or
+# classify as the old streamable-HTTP transport.
+if command -v codex >/dev/null 2>&1; then
+  HOME="$HOME_FIXTURE" CODEX_HOME="$HOME_FIXTURE/.codex" codex mcp list --json > "$TMP/codex-mcp-list.json"
+  jq -e --arg expected "$HOME_FIXTURE/.implexa/bin/implexa-codex-mcp" '
+    any(.[]; .name == "implexa"
+      and .transport.type == "stdio"
+      and .transport.command == $expected
+      and (.transport.args | length) == 0)
+  ' "$TMP/codex-mcp-list.json" >/dev/null
+fi
 
 for manifest in \
   "$HOME_FIXTURE/.codex/marketplaces/implexa/.mcp.json" \
@@ -139,6 +155,21 @@ if HOME="$SYMLINK_HOME" IMPLEXA_PLUGIN_REPO_URL="$PLUGIN_REPO" bash "$ROOT/insta
   exit 1
 fi
 grep -q '^sentinel = true$' "$TMP/config-target"
+[ ! -e "$SYMLINK_HOME/.implexa/bin/implexa-codex-mcp" ]
+
+# Every installer-owned legacy config is validated before the first write. A
+# stale temporary-file symlink therefore cannot leave a half-migrated setup.
+TMP_LINK_HOME="$TMP/temp-link-home"
+mkdir -p "$TMP_LINK_HOME/.codex"
+printf '%s\n' '[mcp_servers.implexa]' 'url = "legacy"' > "$TMP_LINK_HOME/.codex/config.toml"
+printf '%s\n' 'external temporary config' > "$TMP/temp-config-target"
+ln -s "$TMP/temp-config-target" "$TMP_LINK_HOME/.codex/config.toml.tmp.legacy"
+if HOME="$TMP_LINK_HOME" IMPLEXA_PLUGIN_REPO_URL="$PLUGIN_REPO" bash "$ROOT/install-for-codex.sh" >"$TMP/temp-link-output" 2>&1; then
+  echo 'symlinked legacy temporary config was accepted' >&2
+  exit 1
+fi
+grep -q '^external temporary config$' "$TMP/temp-config-target"
+[ ! -e "$TMP_LINK_HOME/.implexa/bin/implexa-codex-mcp" ]
 
 # Cache parent and version components are validated before any write. Neither a
 # parent symlink nor a version symlink may redirect migration into an external
@@ -205,5 +236,46 @@ git -C "$UNSAFE_REPO" branch -M main
 HOME="$UNSAFE_HOME" IMPLEXA_PLUGIN_REPO_URL="$UNSAFE_REPO" bash "$ROOT/install-for-codex.sh" >"$TMP/unsafe-output" 2>&1
 grep -q 'unsafe version' "$TMP/unsafe-output"
 grep -q '^do not delete$' "$UNSAFE_HOME/victim/sentinel"
+
+# A normal customer launch has Finder's sparse PATH and must not install jq or
+# Homebrew as a side effect. macOS plutil validates the repository manifest and
+# the installer emits its tiny JSON/TOML records directly.
+SPARSE_HOME="$TMP/sparse-home"
+mkdir -p "$SPARSE_HOME"
+env -i HOME="$SPARSE_HOME" PATH=/usr/bin:/bin IMPLEXA_PLUGIN_REPO_URL="$PLUGIN_REPO" \
+  /bin/bash "$ROOT/install-for-codex.sh" >"$TMP/sparse-output" 2>&1
+! grep -Eiq 'installing jq|jq is required|brew install' "$TMP/sparse-output"
+/usr/bin/plutil -extract implexa.command raw -o - \
+  "$SPARSE_HOME/.codex/plugins/cache/implexa/implexa/1.2.3/.mcp.json" \
+  | grep -Fqx "$SPARSE_HOME/.implexa/bin/implexa-codex-mcp"
+
+# Publishing a cache never recursively deletes the live cache name. If that
+# name changes to a symlink after preflight, only the directory entry may be
+# quarantined; the external target must survive and the final cache is real.
+! grep -Fq 'rm -rf "$cache_dir"' "$ROOT/install-for-codex.sh"
+RACE_HOME="$TMP/race-home"
+RACE_EXTERNAL="$TMP/race-external"
+RACE_BIN="$TMP/race-bin"
+mkdir -p "$RACE_HOME/.codex/marketplaces" \
+  "$RACE_HOME/.codex/plugins/cache/implexa/implexa/1.2.3" "$RACE_EXTERNAL" "$RACE_BIN"
+git clone -q "$PLUGIN_REPO" "$RACE_HOME/.codex/marketplaces/implexa"
+printf '%s\n' 'external survives' > "$RACE_EXTERNAL/sentinel"
+cat > "$RACE_BIN/cp" <<'RACE_CP'
+#!/bin/sh
+if [ -n "${IMPLEXA_RACE_CACHE:-}" ]; then
+  /bin/rm -rf "$IMPLEXA_RACE_CACHE"
+  /bin/ln -s "$IMPLEXA_RACE_EXTERNAL" "$IMPLEXA_RACE_CACHE"
+  unset IMPLEXA_RACE_CACHE IMPLEXA_RACE_EXTERNAL
+fi
+exec /bin/cp "$@"
+RACE_CP
+chmod 700 "$RACE_BIN/cp"
+HOME="$RACE_HOME" PATH="$RACE_BIN:/usr/bin:/bin" \
+  IMPLEXA_RACE_CACHE="$RACE_HOME/.codex/plugins/cache/implexa/implexa/1.2.3" \
+  IMPLEXA_RACE_EXTERNAL="$RACE_EXTERNAL" IMPLEXA_PLUGIN_REPO_URL="$PLUGIN_REPO" \
+  bash "$ROOT/install-for-codex.sh" >"$TMP/race-output" 2>&1
+grep -q '^external survives$' "$RACE_EXTERNAL/sentinel"
+[ -d "$RACE_HOME/.codex/plugins/cache/implexa/implexa/1.2.3" ]
+[ ! -L "$RACE_HOME/.codex/plugins/cache/implexa/implexa/1.2.3" ]
 
 echo 'secret-free Codex install migration: ok'

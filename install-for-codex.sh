@@ -45,6 +45,19 @@ info() { printf "%s→%s %s\n" "$C_BLUE"   "$C_RESET" "$*"; }
 
 path_exists_or_link() { [ -e "$1" ] || [ -L "$1" ]; }
 
+toml_quote() {
+  # Installation is macOS-only and HOME is rejected below if it contains
+  # control characters. Escaping the two TOML basic-string metacharacters is
+  # sufficient and avoids making jq/Homebrew a fresh-install prerequisite.
+  printf '%s' "$1" | /usr/bin/sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/'
+}
+
+json_quote() {
+  # Same bounded path grammar as toml_quote. The result is a JSON string, not a
+  # shell fragment, and is written only with printf.
+  printf '%s' "$1" | /usr/bin/sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/'
+}
+
 ensure_real_directory() {
   local candidate="$1"
   if [ -L "$candidate" ]; then
@@ -78,6 +91,13 @@ preflight_owned_paths() {
   ensure_real_directory "$CODEX_DIR/marketplaces"
   ensure_real_directory "$IMPLEXA_DIR"
   ensure_real_directory "$IMPLEXA_DIR/bin"
+
+  require_real_file_or_absent "$CONFIG_TOML"
+  local owned_config
+  for owned_config in "$CODEX_DIR"/config.toml.implexa-backup-* "$CODEX_DIR"/config.toml.tmp.*; do
+    path_exists_or_link "$owned_config" || continue
+    require_real_file_or_absent "$owned_config"
+  done
 
   local version_dir manifest
   for version_dir in "$PLUGIN_CACHE_BASE"/*; do
@@ -121,6 +141,19 @@ for arg in "$@"; do
 done
 unset IMPLEXA_API_KEY IMPLEXA_INSTALL_TOKEN
 
+# The authenticated broker is currently an Implexa Desktop capability and the
+# Desktop app is macOS-only. A successful-looking Linux/WSL install would leave
+# a permanently dead MCP command, so refuse unsupported systems before writing.
+[ "$(/usr/bin/uname -s)" = "Darwin" ] || {
+  err "The managed Implexa Codex connection currently requires Implexa Desktop on macOS."
+  exit 1
+}
+[ -x /usr/bin/plutil ] || { err "macOS plutil is required to validate the plugin manifest."; exit 1; }
+if printf '%s' "$HOME" | LC_ALL=C /usr/bin/grep -q '[[:cntrl:]]'; then
+  err "HOME contains an unsupported control character; refusing to write config."
+  exit 1
+fi
+
 # Validate every installer-owned parent and existing version before writing any
 # config, shim or cache content. A symlinked version must never redirect cleanup
 # or replacement into an external target.
@@ -140,24 +173,7 @@ else
   ok "codex CLI found at $(command -v codex)"
 fi
 
-# ─── 2. Check jq (needed for JSON parsing) ──────────────────────────────
-if ! command -v jq >/dev/null 2>&1; then
-  warn "jq is required but not installed."
-  if command -v brew >/dev/null 2>&1; then
-    info "Installing jq via Homebrew..."
-    brew install jq </dev/null
-    ok "jq installed"
-  else
-    err "jq not found and Homebrew not available. Install jq manually and re-run."
-    echo "    macOS:  brew install jq"
-    echo "    Linux:  apt-get install jq  (or your distro's package manager)"
-    exit 1
-  fi
-else
-  ok "jq found at $(command -v jq)"
-fi
-
-# ─── 3. Authentication custody ───────────────────────────────────────────
+# ─── 2. Authentication custody ───────────────────────────────────────────
 # Codex receives only a local, revocable capability. Implexa Desktop holds and
 # injects the account credential after binding each connection to the active account.
 # The helper therefore fails closed while Desktop is absent or signed out.
@@ -221,7 +237,7 @@ chmod 700 "$MCP_SHIM_TMP"
 mv "$MCP_SHIM_TMP" "$MCP_SHIM"
 ok "Installed secret-free Codex MCP shim"
 
-MCP_COMMAND_TOML=$(jq -Rn --arg value "$MCP_SHIM" '$value')
+MCP_COMMAND_TOML=$(toml_quote "$MCP_SHIM")
 MCP_BLOCK="[mcp_servers.implexa]
 command = $MCP_COMMAND_TOML"
 
@@ -229,7 +245,7 @@ strip_implexa_block() {
   local input="$1"
   local output="$2"
   awk '
-    /^\[mcp_servers\.implexa\]/ { skip=1; next }
+    /^\[mcp_servers\.implexa(\]|\.)/ { skip=1; next }
     /^\[/ && skip { skip=0 }
     !skip { print }
   ' "$input" > "$output"
@@ -345,7 +361,9 @@ done
 
 write_secret_free_mcp_json() {
   local output="$1"
-  jq -n --arg command "$MCP_SHIM" '{implexa: {command: $command}}' > "$output"
+  local command_json
+  command_json=$(json_quote "$MCP_SHIM")
+  printf '{"implexa":{"command":%s}}\n' "$command_json" > "$output"
   chmod 600 "$output" 2>/dev/null || true
 }
 
@@ -408,7 +426,10 @@ install_skill_files() {
     return 1
   fi
   local plugin_version
-  plugin_version=$(jq -r '.version // "0.11.0"' "$plugin_json")
+  plugin_version=$(/usr/bin/plutil -extract version raw -o - "$plugin_json" 2>/dev/null) || {
+    err "plugin.json has no valid version"
+    return 1
+  }
   printf '%s' "$plugin_version" | LC_ALL=C grep -Eq '^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$' || {
     err "plugin.json contains an unsafe version"
     return 1
@@ -422,21 +443,46 @@ install_skill_files() {
     }
   fi
 
-  # 3. Copy into the versioned cache. Strip .git to keep the cache lean.
-  rm -rf "$cache_dir"
-  mkdir "$cache_dir"
-  if ! cp -R "$MARKETPLACE_DIR/." "$cache_dir/"; then
+  # 3. Assemble the new cache in a private sibling, then publish it by rename.
+  # Never recursively delete the live name: a same-uid path swap between the
+  # validation above and cleanup must move only the swapped directory entry,
+  # never traverse its target.
+  local cache_stage cache_previous
+  cache_stage=$(mktemp -d "$PLUGIN_CACHE_BASE/.install-$plugin_version.XXXXXX") || return 1
+  if ! cp -R "$MARKETPLACE_DIR/." "$cache_stage/"; then
     err "Failed to copy plugin to $cache_dir"
-    # A partial copy could already contain the legacy marketplace manifest.
-    # Remove only the preflighted real version directory before returning.
-    [ -d "$cache_dir" ] && [ ! -L "$cache_dir" ] && rm -rf "$cache_dir"
+    rm -rf "$cache_stage"
     return 1
   fi
-  rm -rf "$cache_dir/.git"
+  rm -rf "$cache_stage/.git"
+
+  canonicalize_manifest_set "$cache_stage/.mcp.json" "$cache_stage"/.mcp.json.tmp*
+  prove_secret_free "$cache_stage/.mcp.json"
+
+  cache_previous=$(mktemp -d "$PLUGIN_CACHE_BASE/.previous-$plugin_version.XXXXXX") || {
+    rm -rf "$cache_stage"
+    return 1
+  }
+  rmdir "$cache_previous"
+  if path_exists_or_link "$cache_dir"; then
+    if ! mv "$cache_dir" "$cache_previous"; then
+      rm -rf "$cache_stage"
+      err "Could not move the prior Implexa cache aside"
+      return 1
+    fi
+  fi
+  if ! mv "$cache_stage" "$cache_dir"; then
+    path_exists_or_link "$cache_previous" && mv "$cache_previous" "$cache_dir" 2>/dev/null || true
+    rm -rf "$cache_stage"
+    err "Could not publish the new Implexa cache"
+    return 1
+  fi
+  # cache_previous is either the exact old directory entry we renamed or is
+  # absent. rm -rf does not follow a symlink stored at that quarantined name.
+  path_exists_or_link "$cache_previous" && rm -rf "$cache_previous"
 
   # 4. Defense in depth: canonicalize the cache manifest even if a stale
   # marketplace checkout was reused. Never substitute or persist an API key.
-  canonicalize_manifest_set "$cache_dir/.mcp.json" "$cache_dir"/.mcp.json.tmp*
   canonicalize_manifest_set "$MARKETPLACE_DIR/.mcp.json" "$MARKETPLACE_DIR"/.mcp.json.tmp*
 
   ok "Installed $plugin_version skill files at $cache_dir"
@@ -499,7 +545,9 @@ register_plugin_in_config() {
   fi
 
   if [ $needs_marketplace -eq 1 ]; then
-    printf '\n[marketplaces.implexa]\nsource_type = "local"\nsource = "%s"\n' "$MARKETPLACE_DIR" >> "$CONFIG_TOML"
+    local marketplace_toml
+    marketplace_toml=$(toml_quote "$MARKETPLACE_DIR")
+    printf '\n[marketplaces.implexa]\nsource_type = "local"\nsource = %s\n' "$marketplace_toml" >> "$CONFIG_TOML"
   fi
   if [ $needs_plugin -eq 1 ]; then
     printf '\n[plugins."implexa@implexa"]\nenabled = true\n' >> "$CONFIG_TOML"
