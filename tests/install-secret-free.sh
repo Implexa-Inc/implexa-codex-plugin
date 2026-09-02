@@ -120,6 +120,58 @@ if [ "$(uname -s)" = Darwin ] && [ -x /usr/bin/nc ]; then
   RESPONSE="$(printf '%s\n' "$REQUEST" | env -i HOME="$FINDER_HOME" PATH=/usr/bin:/bin "$ROOT/scripts/implexa-codex-mcp")"
   wait "$SOCKET_SERVER_PID"
   [ "$RESPONSE" = "$REQUEST" ]
+
+  # A Desktop-launched run sends one validated private preamble before JSON-RPC;
+  # the shim never adds it to ordinary attended sessions.
+  CAPTURE="$TMP/bound-shim-input"
+  node -e '
+    const fs = require("fs"); const net = require("net");
+    const server = net.createServer((socket) => {
+      let body = "";
+      socket.on("data", (chunk) => {
+        body += chunk;
+        const lines = body.split("\n");
+        if (lines.length < 3) return;
+        fs.writeFileSync(process.argv[2], body);
+        socket.end(`${lines[1]}\n`); server.close();
+      });
+    });
+    server.listen(process.argv[1]);
+  ' "$SOCKET_PATH" "$CAPTURE" &
+  SOCKET_SERVER_PID=$!
+  for _try in 1 2 3 4 5 6 7 8 9 10; do [ -S "$SOCKET_PATH" ] && break; sleep 0.05; done
+  BOUND_RESPONSE="$(printf '%s\n' "$REQUEST" | env -i HOME="$FINDER_HOME" PATH=/usr/bin:/bin \
+    IMPLEXA_MCP_REQUEST_ID=11111111-1111-4111-8111-111111111111 \
+    IMPLEXA_MCP_ATTEMPT_ID=22222222-2222-4222-8222-222222222222 \
+    IMPLEXA_MCP_FENCING_EPOCH=8 "$ROOT/scripts/implexa-codex-mcp")"
+  wait "$SOCKET_SERVER_PID"
+  [ "$BOUND_RESPONSE" = "$REQUEST" ]
+  sed -n '1p' "$CAPTURE" | grep -Fqx \
+    '{"kind":"implexa/run-binding-v1","requestId":"11111111-1111-4111-8111-111111111111","launchAttemptId":"22222222-2222-4222-8222-222222222222","fencingEpoch":"8"}'
+  sed -n '2p' "$CAPTURE" | grep -Fqx "$REQUEST"
+
+  # Partial/malformed binding identity is refused before any private-broker
+  # connection. A listener records if the shim reaches it despite the refusal.
+  CONNECTED="$TMP/malformed-binding-connected"
+  node -e '
+    const fs = require("fs"); const net = require("net");
+    const server = net.createServer((socket) => {
+      fs.writeFileSync(process.argv[2], "connected"); socket.destroy(); server.close();
+    });
+    server.listen(process.argv[1]);
+    setTimeout(() => server.close(), 300).unref();
+  ' "$SOCKET_PATH" "$CONNECTED" &
+  SOCKET_SERVER_PID=$!
+  for _try in 1 2 3 4 5 6 7 8 9 10; do [ -S "$SOCKET_PATH" ] && break; sleep 0.05; done
+  if printf '%s\n' "$REQUEST" | env -i HOME="$FINDER_HOME" PATH=/usr/bin:/bin \
+    IMPLEXA_MCP_REQUEST_ID=11111111-1111-4111-8111-111111111111 \
+    IMPLEXA_MCP_ATTEMPT_ID=22222222-2222-4222-8222-222222222222 \
+    "$ROOT/scripts/implexa-codex-mcp" >"$TMP/malformed-out" 2>"$TMP/malformed-err"; then
+    echo 'shim accepted a partial fenced binding' >&2
+    exit 1
+  fi
+  wait "$SOCKET_SERVER_PID"
+  [ ! -e "$CONNECTED" ]
   rm -rf "$SOCKET_ROOT"
 
   MISSING_HOME="$TMP/finder-missing-home"

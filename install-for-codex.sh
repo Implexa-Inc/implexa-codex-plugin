@@ -231,6 +231,27 @@ SOCKET="$(/bin/cat "$LOCATOR")" || refuse
 printf '%s' "$SOCKET" | /usr/bin/grep -Eq "^/private/tmp/implexa-codex-mcp-[A-Za-z0-9]{6}/broker-[a-f0-9]{48}\\.sock$" || refuse
 [ -S "$SOCKET" ] || refuse
 
+# A headless Desktop-launched Codex child may carry a non-secret, per-run
+# request/attempt/fence identity. Validate the complete shape before it reaches
+# the private broker. An ordinary attended Codex session has none of these
+# variables and stays byte-for-byte JSON-RPC over stdio.
+BIND_REQUEST="${IMPLEXA_MCP_REQUEST_ID:-}"
+BIND_ATTEMPT="${IMPLEXA_MCP_ATTEMPT_ID:-}"
+BIND_EPOCH="${IMPLEXA_MCP_FENCING_EPOCH:-}"
+if [ -n "$BIND_REQUEST$BIND_ATTEMPT$BIND_EPOCH" ]; then
+  printf '%s' "$BIND_REQUEST" | /usr/bin/grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' || refuse
+  if [ -n "$BIND_ATTEMPT$BIND_EPOCH" ]; then
+    printf '%s' "$BIND_ATTEMPT" | /usr/bin/grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' || refuse
+    printf '%s' "$BIND_EPOCH" | /usr/bin/grep -Eq '^[1-9][0-9]*$' || refuse
+    BINDING="{\"kind\":\"implexa/run-binding-v1\",\"requestId\":\"$BIND_REQUEST\",\"launchAttemptId\":\"$BIND_ATTEMPT\",\"fencingEpoch\":\"$BIND_EPOCH\"}"
+  else
+    BINDING="{\"kind\":\"implexa/run-binding-v1\",\"requestId\":\"$BIND_REQUEST\"}"
+  fi
+  unset IMPLEXA_MCP_REQUEST_ID IMPLEXA_MCP_ATTEMPT_ID IMPLEXA_MCP_FENCING_EPOCH
+  { printf '%s\n' "$BINDING"; /bin/cat; } | /usr/bin/nc -U "$SOCKET"
+  exit $?
+fi
+
 exec /usr/bin/nc -U "$SOCKET"
 IMPLEXA_CODEX_MCP_SHIM
 chmod 700 "$MCP_SHIM_TMP"

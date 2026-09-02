@@ -6,10 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > **Note:** the plugin is a thin wrapper that pins skills and points at the
-> Implexa backend at `https://core.implexa.ai/api/v2/mcp` (Streamable HTTP
-> transport). Backend tool changes propagate to all clients without a plugin
+> Implexa Desktop's local authenticated MCP broker (stdio transport). Backend
+> tool changes propagate to all clients without a plugin
 > release. Only changes to skills, the plugin manifest, or install scripts
 > warrant a version bump.
+
+## [0.29.2] - 2026-09-01
+
+### Fixed
+
+- Replaced obsolete per-run HTTP-header assumptions with a validated private
+  stdio preamble. Desktop-launched Codex runs now carry request, attempt, and
+  fencing identity through the managed local broker without writing values to
+  Codex configuration or exposing account credentials.
 
 ## [0.29.1] - 2026-08-31
 
